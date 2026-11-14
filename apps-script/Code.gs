@@ -22,6 +22,7 @@ function doPost(e) {
   if (req.action === 'delete') return delete_(req.id);
   if (req.action === 'scan') return scan_(req.data, req.mime);
   if (req.action === 'upload') return upload_(req.data, req.mime);
+  if (req.action === 'parse') return parseText_(req.text);
   if (req.action === 'drivelist') return driveList_();
   if (req.action === 'driveimport') return driveImport_(req.id);
   return out_({ ok: false, error: 'unknown action' });
@@ -161,6 +162,13 @@ function scan_(b64, mime) {
     if (/permission|authori/i.test(msg)) return out_({ ok: false, error: 'The script needs permission to scan. Run "authorize" in Apps Script, then redeploy.' });
     return out_({ ok: false, error: 'Scan failed (' + msg.slice(0, 120) + ')' });
   }
+}
+
+/** Recipe text shared from another app. Nothing is stored in Drive for this. */
+function parseText_(text) {
+  text = String(text || '').slice(0, 20000);
+  if (text.replace(/\s/g, '').length < 20) return out_({ ok: false, error: 'There isn\'t enough text to read as a recipe' });
+  return out_({ ok: true, text: text, fileUrl: '', recipe: parseScan_(text) });
 }
 
 // ---------- reading text out of files (shared by upload, Drive inbox and pasted Drive links) ----------

@@ -489,12 +489,24 @@ async function add(params, ex) {
     set('prepTime', r.prepTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
     if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
     set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
-    // A file has no web page: link the saved original and mark it as an import.
-    if (d.fileUrl) { set('sourceUrl', d.fileUrl); set('sourceName', 'Import'); }
+    // A file or shared text has no web page: mark it as an import, and link the saved original if there is one.
+    set('sourceName', 'Import');
+    if (d.fileUrl) set('sourceUrl', d.fileUrl);
     $app.querySelector('#rawtxt').textContent = d.text || ''; $app.querySelector('#raw').hidden = !d.text;
     msg.textContent = 'Read the file — this is rarely perfect, so check every line before saving.';
     window.scrollTo(0, 0);
   };
+  // Text shared from another app (e.g. a recipe selected in Gmail): read it straight away.
+  if (shared.text) {
+    if (!Cfg.url) msg.textContent = 'Connect the Google Sheet first — reading shared text needs it.';
+    else {
+      msg.textContent = 'Reading the shared text…';
+      api({ action: 'parse', text: shared.text }).then(d => applyScanned(d)).catch(e => {
+        if (e instanceof AuthError) return settings('Enter the shared passcode, then share the text again.');
+        msg.textContent = 'Couldn’t read the shared text: ' + e.message;
+      });
+    }
+  }
   const runScan = async file => {
     if (!file) return;
     if (!Cfg.url) { msg.textContent = 'Connect the Google Sheet first — scanning needs it.'; return; }
@@ -597,9 +609,14 @@ window.addEventListener('hashchange', route);
 (function () {
   const p = new URLSearchParams(location.search);
   if (p.has('url') || p.has('text') || p.has('title')) {
+    const text = (p.get('text') || '').trim();
     let url = p.get('url') || '';
-    if (!url) { const m = (p.get('text') || '').match(/https?:\/\/\S+/); url = m ? m[0] : ''; }
-    window.__shared = { title: p.get('title') || '', url };
+    if (!url) { const m = text.match(/https?:\/\/\S+/); url = m ? m[0] : ''; }
+    // A shared web page is "title + link". Shared *text* (e.g. a recipe selected in an email) has real content
+    // beyond any link: several lines or a few hundred characters.
+    const body = text.replace(/https?:\/\/\S+/g, '').trim();
+    const isRecipeText = body.length >= 150 || body.split('\n').filter(l => l.trim()).length >= 4;
+    window.__shared = isRecipeText ? { title: p.get('title') || '', url: '', text: body } : { title: p.get('title') || '', url };
     history.replaceState(null, '', location.pathname + '#/add');
   }
 })();
