@@ -26,6 +26,23 @@ function setup() {
   Logger.log('Set up. New emails are collected every 10 minutes.');
 }
 
+/**
+ * Recipe-looking attachments (screenshots, photos, PDFs, Word files, text files), including pictures pasted into the
+ * email body. Up to 3 per email, each under 6 MB. Tiny images (logos, signature icons) are skipped.
+ */
+function files_(message) {
+  const ok = /^(image\/(jpeg|png|webp|gif)|application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|text\/plain)$/;
+  const out = [];
+  message.getAttachments({ includeInlineImages: true, includeAttachments: true }).forEach(function (a) {
+    const mime = String(a.getContentType()).toLowerCase().split(';')[0];
+    const size = a.getSize();
+    if (out.length >= 3 || !ok.test(mime) || size > 6 * 1024 * 1024) return;
+    if (/^image\//.test(mime) && size < 20 * 1024) return;
+    out.push({ name: a.getName(), mime: mime, data: Utilities.base64Encode(a.getBytes()) });
+  });
+  return out;
+}
+
 /** Sends new inbox emails to the app, then labels and archives them so they are only sent once. */
 function collect() {
   const p = PropertiesService.getScriptProperties();
@@ -39,7 +56,7 @@ function collect() {
     const m = t.getMessages()[0];
     const body = {
       key: key, action: 'intakeadd', address: address,
-      item: { id: m.getId(), from: m.getFrom(), subject: m.getSubject(), date: m.getDate().toISOString(), plain: m.getPlainBody().slice(0, 60000) }
+      item: { id: m.getId(), from: m.getFrom(), subject: m.getSubject(), date: m.getDate().toISOString(), plain: m.getPlainBody().slice(0, 60000), files: files_(m) }
     };
     let result;
     try {

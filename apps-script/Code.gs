@@ -78,14 +78,34 @@ function intakeRows_() {
 function intakeAddAction_(item, address) {
   if (!item || !item.id) return out_({ ok: false, error: 'bad email' });
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(address || ''))) PropertiesService.getScriptProperties().setProperty('INTAKE_ADDRESS', String(address).slice(0, 120));
+  const id = String(item.id).slice(0, 80);
+  // Cheap checks first, so a repeat or a full queue doesn't cost any scanning time.
+  const before = intakeRows_();
+  if (before.some(function (r) { return r.id === id; })) return out_({ ok: true, duplicate: true });
+  if (before.filter(function (r) { return r.status === 'pending'; }).length >= 150) return out_({ ok: false, error: 'queue is full' });
+
+  // Attachments (screenshots, photos, PDFs, Word files) are read the same way as an uploaded file: Drive OCR.
+  const okMime = /^(image\/(jpeg|png|webp|gif)|application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|text\/plain)$/;
+  const scanned = [];
+  (item.files || []).slice(0, 3).forEach(function (f) {
+    if (!f || !f.data || !okMime.test(String(f.mime))) return;
+    try {
+      const t = textFromBlob_(Utilities.newBlob(Utilities.base64Decode(f.data), f.mime, String(f.name || 'attachment').slice(0, 100)), f.mime, f.name);
+      if (t && t.replace(/\s/g, '').length >= 20) scanned.push(t.trim());
+    } catch (e) { /* one unreadable attachment shouldn't lose the email */ }
+  });
+  const ocr = scanned.join('\n\n');
+  const bodyText = String(item.plain || '').slice(0, 60000);
+  const bodyIsThin = bodyText.replace(/\s/g, '').length < 40;
+  // A screenshot-only email: the recipe's own title (first line of the scan) beats a subject like "Fwd: look at this".
+  const combined = (ocr && bodyIsThin) ? ocr : composeEmail_(String(item.subject || '').slice(0, 300), bodyText + (ocr ? '\n\n' + ocr : ''));
+
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
   try {
     const rows = intakeRows_();
-    const id = String(item.id).slice(0, 80);
     if (rows.some(function (r) { return r.id === id; })) return out_({ ok: true, duplicate: true });
-    if (rows.filter(function (r) { return r.status === 'pending'; }).length >= 150) return out_({ ok: false, error: 'queue is full' });
-    const text = composeEmail_(String(item.subject || '').slice(0, 300), String(item.plain || '').slice(0, 60000)).slice(0, 40000);
+    const text = combined.slice(0, 40000);
     const empty = text.replace(/\s/g, '').length < 20;
     const row = [id, String(item.from || '').slice(0, 200), text.split('\n')[0].slice(0, 200), String(item.date || new Date().toISOString()).slice(0, 40),
                  text, empty ? 'skipped' : 'pending', new Date().toISOString()];
