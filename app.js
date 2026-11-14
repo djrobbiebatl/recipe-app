@@ -242,6 +242,7 @@ async function recipe(id) {
       ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" checked style="width:auto"> with picture</label>' : ''}
     </div>
     ${preheatLine(r.steps) ? `<p class="preheat">🔥 ${esc(preheatLine(r.steps))}</p>` : ''}
+    ${marinateLine(r.steps) ? `<p class="preheat">⏱️ ${esc(marinateLine(r.steps))}</p>` : ''}
     <div class="two">
       <section>
         <h2>Ingredients</h2>
@@ -308,6 +309,16 @@ function preheatLine(steps) {
   }
   return found.slice(0, 2).join(' ');
 }
+// "Marinate for at least 2 hours." — only sentences that actually give a time, so "whisk the marinade" doesn't count.
+function marinateLine(steps) {
+  const found = [];
+  for (const s of steps || []) {
+    for (const sentence of String(s).split(/(?<=[.!?])\s+/)) {
+      if (/\bmarinat(e|es|ed|ing)\b/i.test(sentence) && /\b(hours?|hrs?|minutes?|mins?|overnight|days?)\b/i.test(sentence) && !found.includes(sentence.trim())) found.push(sentence.trim());
+    }
+  }
+  return found.slice(0, 2).join(' ');
+}
 
 const ingText = i => ((i.amt == null ? '' : fmtAmt(i.amt)) + ' ' + (i.unit || '') + ' ' + i.item).replace(/\s+/g, ' ').trim();
 
@@ -332,6 +343,8 @@ async function add(params, ex) {
     <p id="impmsg" class="muted"></p>
     <details id="raw" class="note" hidden><summary>Show the scanned text</summary><pre id="rawtxt" style="white-space:pre-wrap"></pre></details>
     <form id="f">
+      <p class="savetop"><button class="btn primary" type="submit">${ex ? 'Save changes' : 'Save recipe'}</button>
+        ${ex ? `<a class="btn" href="#/r/${esc(ex.id)}">Cancel</a>` : ''}</p>
       <label class="f">Title</label><input name="title" required value="${esc(ex ? v.title : shared.title)}">
       <label class="f">Category</label>
       <div class="row" style="margin-top:0"><select name="category" style="flex:1">${cats.map(c => `<option${v.category === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
@@ -492,13 +505,15 @@ async function add(params, ex) {
       prepTime: d.prepTime.trim(), totalTime: d.totalTime.trim(), nutrition: d.nutrition.trim(), notes: d.notes.trim(),
       ingredients: d.ingredients.split('\n').map(parseIngredient).filter(Boolean),
       steps: d.steps.split('\n').map(s => s.replace(/^\s*\d{1,2}[.)]\s+/, '').trim()).filter(Boolean) };
-    const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Saving…';
+    // Two Save buttons (top and bottom) — keep them in step.
+    const setBtns = (off, label) => e.target.querySelectorAll('button[type=submit]').forEach(b => { b.disabled = off; b.textContent = label; });
+    setBtns(true, 'Saving…');
     try {
       const dup = ex ? null : await findDup(rec.sourceUrl, rec.title);
-      if (dup && !confirm(`“${dup.r.title}” is already in your recipes. Save another copy anyway?`)) { btn.disabled = false; btn.textContent = saveLabel; return; }
+      if (dup && !confirm(`“${dup.r.title}” is already in your recipes. Save another copy anyway?`)) { setBtns(false, saveLabel); return; }
       await Store.save(rec); location.hash = '#/r/' + rec.id; }
     catch (err) {
-      btn.disabled = false; btn.textContent = saveLabel;
+      setBtns(false, saveLabel);
       if (err instanceof AuthError) return settings('That passcode didn’t work. Check it and try again.');
       toast('Couldn’t save: ' + err.message);
     }
