@@ -91,9 +91,13 @@ const normUrl = u => {
     return (x.hostname.replace(/^www\./, '') + x.pathname.replace(/\/+$/, '') + (keep ? '?' + keep : '')).toLowerCase();
   } catch (e) { return ''; }
 };
+// Returns the matching recipe, tagged by how it matched: 'url' (same page) or 'title' (could be a different recipe).
 async function findDup(url, title) {
-  const n = normUrl(url), t = (title || '').trim().toLowerCase();
-  return (await Store.list()).find(r => (n && normUrl(r.sourceUrl) === n) || (t && r.title.trim().toLowerCase() === t));
+  const n = normUrl(url), t = (title || '').trim().toLowerCase(), all = await Store.list();
+  const byUrl = n && all.find(r => normUrl(r.sourceUrl) === n);
+  if (byUrl) return { r: byUrl, by: 'url' };
+  const byTitle = t && all.find(r => r.title.trim().toLowerCase() === t);
+  return byTitle ? { r: byTitle, by: 'title' } : null;
 }
 const uid = () => 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -246,10 +250,11 @@ async function add(params) {
     const showDup = d => { msg.innerHTML = `You already have this one: <a href="#/r/${esc(d.id)}">${esc(d.title)}</a>`; };
     try {
       let dup = await findDup(url, '');
-      if (dup) return showDup(dup);
+      if (dup) return showDup(dup.r);                       // same page: don't import twice
       const r = (await api({ action: 'import', url })).recipe;
       dup = await findDup(r.sourceUrl || url, r.title);
-      if (dup) return showDup(dup);
+      if (dup && dup.by === 'url') return showDup(dup.r);
+      if (dup && !confirm(`You already have a recipe called “${dup.r.title}”. Is this a different one? OK = import it anyway, Cancel = skip.`)) return showDup(dup.r);
       const found = r.ingredients && r.ingredients.length;
       const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
       set('title', r.title); set('sourceName', r.sourceName); set('sourceUrl', r.sourceUrl || url);
@@ -275,7 +280,7 @@ async function add(params) {
     const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Saving…';
     try {
       const dup = await findDup(rec.sourceUrl, rec.title);
-      if (dup && !confirm(`“${dup.title}” is already in your recipes. Save another copy anyway?`)) { btn.disabled = false; btn.textContent = 'Save recipe'; return; }
+      if (dup && !confirm(`“${dup.r.title}” is already in your recipes. Save another copy anyway?`)) { btn.disabled = false; btn.textContent = 'Save recipe'; return; }
       await Store.save(rec); location.hash = '#/r/' + rec.id; }
     catch (err) {
       btn.disabled = false; btn.textContent = 'Save recipe';
