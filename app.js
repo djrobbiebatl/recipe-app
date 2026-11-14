@@ -245,7 +245,7 @@ async function recipe(id) {
       <button class="btn" id="print">🖨️ Print</button>
       <a class="btn" href="#/edit/${esc(r.id)}">✏️ Edit</a>
       <button class="btn" id="del">🗑️ Delete</button>
-      ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" checked style="width:auto"> with picture</label>' : ''}
+      ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" style="width:auto"> print with picture</label>' : ''}
     </div>
     ${preheatLine(r.steps) ? `<p class="preheat">🔥 ${esc(preheatLine(r.steps))}</p>` : ''}
     ${marinateLine(r.steps) ? `<p class="preheat">⏱️ ${esc(marinateLine(r.steps))}</p>` : ''}
