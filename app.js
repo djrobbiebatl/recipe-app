@@ -228,7 +228,7 @@ async function recipe(id) {
   $app.innerHTML = `
     <a href="#/" class="noprint">← All recipes</a>
     <h1 class="titlerow"><span>${esc(r.title)}</span><button class="star big noprint ${r.favorite ? 'on' : ''}" id="fav" title="Favorite" aria-label="Favorite">${r.favorite ? '★' : '☆'}</button></h1>
-    <div class="muted">${esc(r.category)} · Source: ${src ? `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(r.sourceName || src)}</a>` : esc(r.sourceName)}</div>
+    <div class="muted">${esc(r.category)} · Source: ${src ? `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(r.sourceName || src)}</a>${/(^|\.)(drive|docs)\.google\.com\//i.test(src.replace(/^https?:\/\//i, '')) ? '' : `<span class="onlyprint"> — ${esc(src)}</span>`}` : esc(r.sourceName)}</div>
     ${r.image ? `<img class="hero" src="${esc(safeUrl(r.image))}" alt="" referrerpolicy="no-referrer">` : ''}
     <p>${esc(r.summary)}</p>
     <div class="row facts">
@@ -270,7 +270,9 @@ async function recipe(id) {
     e.target.closest('tr').classList.toggle('missing', e.target.checked);
   };
   $app.querySelector('#print').onclick = () => {
-    const p = $app.querySelector('#pimg'); document.body.classList.toggle('noimg', !!p && !p.checked); window.print();
+    const p = $app.querySelector('#pimg'); document.body.classList.toggle('noimg', !!p && !p.checked);
+    window.addEventListener('afterprint', () => document.body.classList.remove('noimg'), { once: true });
+    window.print();
   };
   $app.querySelector('#del').onclick = async () => {
     if (!confirm(`Delete “${r.title}”? This removes it from the shared sheet for everyone and can't be undone.`)) return;
