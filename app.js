@@ -244,7 +244,7 @@ async function add(params) {
     const rec = { id: uid(), title: d.title.trim(), category: d.category, sourceName: d.sourceName.trim(), sourceUrl: d.sourceUrl.trim(),
       servings: +d.servings || 1, summary: d.summary.trim(), image: d.image.trim(),
       ingredients: d.ingredients.split('\n').map(parseIngredient).filter(Boolean),
-      steps: d.steps.split('\n').map(s => s.trim()).filter(Boolean) };
+      steps: d.steps.split('\n').map(s => s.replace(/^\s*\d{1,2}[.)]\s+/, '').trim()).filter(Boolean) };
     const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Saving…';
     try { await Store.save(rec); location.hash = '#/r/' + rec.id; }
     catch (err) {

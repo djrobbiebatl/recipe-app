@@ -87,14 +87,23 @@ function findRecipe_(x) {
   return findRecipe_(x['@graph']) || findRecipe_(x.mainEntity) || findRecipe_(x.mainEntityOfPage);
 }
 
+// Some sites ship every step as one blob: "1. Do this.2. Do that." — split it, and drop the
+// leading numbers (the app numbers the list itself).
+function splitSteps_(text) {
+  let t = String(text).replace(/<\/?(li|p|br)[^>]*>/gi, '\n');
+  t = clean_(t);
+  if (/^\s*1[.)]\s*\S/.test(t)) t = t.replace(/(^|[.!?)"”])\s*(\d{1,2})[.)]\s*(?=[A-Z])/g, '$1\n');
+  return t.split(/\n+/).map(function (s) { return s.replace(/^\s*\d{1,2}[.)]\s+/, '').trim(); }).filter(String);
+}
+
 function steps_(ins) {
   if (!ins) return [];
-  if (typeof ins === 'string') return clean_(ins.replace(/<\/?(li|p|br)[^>]*>/gi, '\n')).split(/\n+/).map(function (s) { return s.trim(); }).filter(String);
+  if (typeof ins === 'string') return splitSteps_(ins);
   const out = [];
   [].concat(ins).forEach(function (s) {
-    if (typeof s === 'string') { const t = clean_(s); if (t) out.push(t); }
+    if (typeof s === 'string') splitSteps_(s).forEach(function (t) { out.push(t); });
     else if (s && s.itemListElement) steps_(s.itemListElement).forEach(function (t) { out.push(t); });
-    else if (s && (s.text || s.name)) { const t = clean_(s.text || s.name); if (t) out.push(t); }
+    else if (s && (s.text || s.name)) splitSteps_(s.text || s.name).forEach(function (t) { out.push(t); });
   });
   return out;
 }
