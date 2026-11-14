@@ -4,18 +4,53 @@
 const CATEGORIES = ['Entrée', 'Side', 'Dessert', 'Breakfast', 'Appetizer', 'Drink'];
 
 // ---------- data layer ----------
+class AuthError extends Error {}
+const Cfg = {
+  get url() { return (window.APP_CONFIG && window.APP_CONFIG.apiUrl) || ''; },
+  get key() { try { return localStorage.getItem('recipes.key') || ''; } catch (e) { return ''; } },
+  get name() { try { return localStorage.getItem('recipes.name') || ''; } catch (e) { return ''; } },
+  set(k, n) { try { localStorage.setItem('recipes.key', k); localStorage.setItem('recipes.name', n); } catch (e) {} }
+};
+const lsGet = k => { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+
+async function api(body) {
+  if (!Cfg.key) throw new AuthError('no passcode');
+  // text/plain keeps this a "simple" request, so the browser skips the CORS preflight Apps Script can't answer.
+  const res = await fetch(Cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ key: Cfg.key, ...body }) });
+  const data = await res.json();
+  if (!data.ok) { if (data.error === 'auth') throw new AuthError('wrong passcode'); throw new Error(data.error || 'server error'); }
+  return data;
+}
+
 const Store = {
-  key: 'recipes.local.v1',
-  async list() {
-    try { const s = localStorage.getItem(this.key); if (s) return JSON.parse(s); } catch (e) {}
-    return SAMPLE;
+  mem: null,
+  async list(fresh) {
+    if (!Cfg.url) return lsGet('recipes.local.v1') || SAMPLE;      // demo mode until the Sheet is connected
+    if (this.mem && !fresh) return this.mem;
+    try {
+      this.mem = (await api({ action: 'list' })).recipes;
+      lsSet('recipes.cache', this.mem);
+    } catch (e) {
+      if (e instanceof AuthError) throw e;
+      this.mem = lsGet('recipes.cache');
+      if (!this.mem) throw e;
+      toast('Offline — showing saved recipes');
+    }
+    return this.mem;
   },
   async get(id) { return (await this.list()).find(r => r.id === id); },
   async save(r) {
+    if (Cfg.url) {
+      await api({ action: 'save', recipe: r, name: Cfg.name });
+      await this.list(true);
+      return;
+    }
     const all = await this.list();
     const i = all.findIndex(x => x.id === r.id);
     if (i >= 0) all[i] = r; else all.unshift(r);
-    try { localStorage.setItem(this.key, JSON.stringify(all)); } catch (e) {}
+    lsSet('recipes.local.v1', all);
   }
 };
 
@@ -63,8 +98,24 @@ function fmtAmt(n) {
 }
 
 // ---------- views ----------
+function settings(msg) {
+  $app.innerHTML = `
+    <h1>Settings</h1>
+    ${msg ? `<div class="note">${esc(msg)}</div>` : ''}
+    ${Cfg.url ? '' : '<div class="note">Demo mode: the Google Sheet isn’t connected yet, so recipes only save on this device.</div>'}
+    <form id="s">
+      <label class="f">Your name (shown as “added by”)</label><input name="name" value="${esc(Cfg.name)}" placeholder="Rob or Damon">
+      <label class="f">Shared passcode</label><input name="key" type="password" autocomplete="current-password" value="${esc(Cfg.key)}">
+      <p><button class="btn primary" type="submit">Save</button></p>
+    </form>`;
+  $app.querySelector('#s').onsubmit = e => {
+    e.preventDefault(); const d = Object.fromEntries(new FormData(e.target));
+    Cfg.set(d.key.trim(), d.name.trim()); Store.mem = null; toast('Saved'); location.hash = '#/';
+  };
+}
+
 async function home() {
-  const all = await Store.list();
+  const all = await Store.list(true);
   let q = '', cat = '';
   $app.innerHTML = `
     <input id="q" type="search" placeholder="Search recipes or ingredients…" autocomplete="off">
@@ -168,7 +219,13 @@ async function add(params) {
       servings: +d.servings || 1, summary: d.summary.trim(), image: d.image.trim(),
       ingredients: d.ingredients.split('\n').map(parseIngredient).filter(Boolean),
       steps: d.steps.split('\n').map(s => s.trim()).filter(Boolean) };
-    await Store.save(rec); location.hash = '#/r/' + rec.id;
+    const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Saving…';
+    try { await Store.save(rec); location.hash = '#/r/' + rec.id; }
+    catch (err) {
+      btn.disabled = false; btn.textContent = 'Save recipe';
+      if (err instanceof AuthError) return settings('That passcode didn’t work. Check it and try again.');
+      toast('Couldn’t save: ' + err.message);
+    }
   };
 }
 
@@ -186,12 +243,18 @@ function parseIngredient(line) {
 }
 
 // ---------- router ----------
-function route() {
+async function route() {
   const h = location.hash || '#/';
   window.scrollTo(0, 0);
-  if (h.startsWith('#/r/')) return recipe(decodeURIComponent(h.slice(4)));
-  if (h.startsWith('#/add')) return add(window.__shared);
-  return home();
+  try {
+    if (h.startsWith('#/settings')) return settings();
+    if (h.startsWith('#/r/')) return await recipe(decodeURIComponent(h.slice(4)));
+    if (h.startsWith('#/add')) return await add(window.__shared);
+    return await home();
+  } catch (e) {
+    if (e instanceof AuthError) return settings(Cfg.key ? 'That passcode didn’t work.' : 'Enter the shared passcode to open the recipes.');
+    $app.innerHTML = `<p>Couldn’t load recipes: ${esc(e.message)}. <a href="#/">Try again</a></p>`;
+  }
 }
 window.addEventListener('hashchange', route);
 
