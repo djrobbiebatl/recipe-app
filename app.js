@@ -116,7 +116,13 @@ async function filePayload(file) {
     if (file.size > 8 * 1024 * 1024) throw new Error('That PDF is over 8 MB');
     return { mime: file.type, data: await toB64(file) };
   }
-  if (!file.type.startsWith('image/')) throw new Error('Please choose a photo or a PDF');
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  const DOC = { docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', doc: 'application/msword', txt: 'text/plain' };
+  if (DOC[ext] || file.type === 'text/plain') {
+    if (file.size > 8 * 1024 * 1024) throw new Error('That file is over 8 MB');
+    return { mime: DOC[ext] || file.type, data: await toB64(file) };
+  }
+  if (!file.type.startsWith('image/')) throw new Error('Please choose a photo, PDF, Word document or text file');
   let bmp;
   try { bmp = await createImageBitmap(file); } catch (e) { throw new Error('Could not open that image (try a JPEG or PNG)'); }
   const s = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
@@ -335,9 +341,9 @@ async function add(params, ex) {
     <div class="row"><input id="iu" type="url" placeholder="Paste a recipe link…" value="${esc(shared.url)}" style="flex:1;min-width:200px">
       <button class="btn primary" id="imp" type="button">Import</button></div>
     <div class="row">
-      <button class="btn" id="scan" type="button">📷 Scan photo or PDF</button>
-      <input id="file" type="file" accept="image/*,application/pdf" hidden>
-      <span class="muted">…or drag a photo / PDF anywhere on this page</span>
+      <button class="btn" id="scan" type="button">📷 Scan photo or file</button>
+      <input id="file" type="file" accept="image/*,application/pdf,.pdf,.doc,.docx,.txt,text/plain" hidden>
+      <span class="muted">Photo, PDF, Word (.doc/.docx) or .txt — or drag a file anywhere on this page</span>
     </div>
     </div>
     <p id="impmsg" class="muted"></p>

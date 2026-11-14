@@ -90,13 +90,20 @@ function upload_(b64, mime) {
 
 // ---------- photo / PDF scan: Google Drive turns the file into a Doc (with OCR), we read the text ----------
 function scan_(b64, mime) {
-  if (!b64 || !/^(image\/(jpeg|png|webp|gif)|application\/pdf)$/.test(String(mime))) return out_({ ok: false, error: 'Please use a photo (JPEG/PNG) or a PDF' });
+  const okMime = /^(image\/(jpeg|png|webp|gif)|application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|text\/plain)$/;
+  if (!b64 || !okMime.test(String(mime))) return out_({ ok: false, error: 'Please use a photo, PDF, Word document (.doc/.docx) or text file' });
   let id = null;
   try {
     const blob = Utilities.newBlob(Utilities.base64Decode(b64), mime, 'recipe-scan');
-    const f = Drive.Files.create({ name: 'recipe-scan (temp)', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'en' });
-    id = f.id;
-    const text = DocumentApp.openById(id).getBody().getText();
+    let text;
+    if (mime === 'text/plain') {
+      text = blob.getDataAsString('UTF-8');          // plain text needs no conversion
+    } else {
+      // Drive converts photos/PDFs (with OCR) and Word files into a Google Doc, which we read and then delete.
+      const f = Drive.Files.create({ name: 'recipe-scan (temp)', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'en' });
+      id = f.id;
+      text = DocumentApp.openById(id).getBody().getText();
+    }
     if (!text || text.replace(/\s/g, '').length < 20) return out_({ ok: false, error: 'I couldn\'t find any readable text in that file' });
     let fileUrl = '';
     try { fileUrl = storeFile_(b64, mime, 'recipe-scan-' + Date.now()).viewUrl; } catch (e3) { /* keep going without a link */ }
