@@ -329,9 +329,71 @@ function marinateLine(steps) {
 const ingText = i => ((i.amt == null ? '' : fmtAmt(i.amt)) + ' ' + (i.unit || '') + ' ' + i.item).replace(/\s+/g, ' ').trim();
 
 // One screen for both adding (ex = undefined) and editing (ex = the saved recipe).
+// ---------- Review tab: recipes forwarded by email wait here until you tidy them up and post them ----------
+function setBadge(n) {
+  const b = document.getElementById('badge');
+  try { localStorage.setItem('recipes.badge', String(n)); } catch (e) {}
+  b.textContent = n; b.hidden = !n;
+}
+async function refreshBadge() {
+  if (!Cfg.url || !Cfg.key) return;
+  try { setBadge((await api({ action: 'intakecount' })).count); } catch (e) { /* the badge is a nicety */ }
+}
+
+async function review() {
+  $app.innerHTML = `<h1>Review</h1>
+    <p class="muted">Forward a recipe email to the app’s address and it waits here. Open it, clean it up, then post it to your recipes.</p>
+    <div id="rv"><p class="muted">Checking for new emails… this can take a few seconds.</p></div>`;
+  const rv = $app.querySelector('#rv');
+  if (!Cfg.url) { rv.textContent = 'Connect the Google Sheet first — email review needs it.'; return; }
+  let d;
+  try { d = await api({ action: 'intakesync' }); }
+  catch (e) {
+    if (e instanceof AuthError) throw e;
+    rv.innerHTML = `<p>${esc(e.message)}</p>`; return;
+  }
+  setBadge(d.items.length);
+  const draw = () => {
+    rv.innerHTML = (d.address ? `<div class="note">Forward recipes to: <b id="addr">${esc(d.address)}</b> <button class="btn" id="copyaddr" type="button">Copy</button>
+        <div class="muted">Anyone who has this address can send recipes here. Nothing goes live until you post it.</div></div>` : '') +
+      (d.items.length ? d.items.map(i => `
+        <div class="qitem" data-id="${esc(i.id)}">
+          <b>${esc(i.subject || '(no subject)')}</b>
+          <div class="muted">From ${esc(i.from || 'unknown')} · ${esc(new Date(i.date).toLocaleDateString())}</div>
+          <div class="muted">${esc(i.snippet)}</div>
+          <div class="row"><button class="btn primary" data-act="open" type="button">Review &amp; post</button>
+            <button class="btn" data-act="dismiss" type="button">Dismiss</button></div>
+        </div>`).join('') : '<p>Nothing waiting. 🎉 Forward a recipe email and it will show up here.</p>');
+    const c = rv.querySelector('#copyaddr');
+    if (c) c.onclick = async () => { try { await navigator.clipboard.writeText(d.address); toast('Address copied'); } catch (e) { prompt('Copy this address:', d.address); } };
+  };
+  draw();
+  rv.onclick = async e => {
+    const btn = e.target.closest('[data-act]'); if (!btn) return;
+    const id = btn.closest('.qitem').dataset.id;
+    btn.disabled = true;
+    try {
+      if (btn.dataset.act === 'dismiss') {
+        if (!confirm('Dismiss this email? It leaves the queue and won’t come back.')) { btn.disabled = false; return; }
+        await api({ action: 'intakemark', id, status: 'dismissed' });
+        d.items = d.items.filter(x => x.id !== id); setBadge(d.items.length); draw();
+      } else {
+        const data = await api({ action: 'intakeget', id });
+        window.__intake = { id, data }; location.hash = '#/add';
+      }
+    } catch (err) {
+      btn.disabled = false;
+      if (err instanceof AuthError) return settings('That passcode didn’t work.');
+      toast('Couldn’t do that: ' + err.message);
+    }
+  };
+}
+
 async function add(params, ex) {
   const shared = params || {};
   window.__shared = null; // one-shot, so coming back to Add later doesn't re-import
+  const intake = window.__intake || null; window.__intake = null;   // set when opened from the Review tab
+  const cancelHref = ex ? '#/r/' + esc(ex.id) : intake ? '#/review' : '#/';
   const v = ex || {};
   const cats = allCats(await Store.list());
   if (ex && ex.category && !cats.includes(ex.category)) cats.push(ex.category);
@@ -352,7 +414,7 @@ async function add(params, ex) {
     <details id="raw" class="note" hidden><summary>Show the scanned text</summary><pre id="rawtxt" style="white-space:pre-wrap"></pre></details>
     <form id="f">
       <p class="savetop"><button class="btn primary" type="submit">${ex ? 'Save changes' : 'Save recipe'}</button>
-        <a class="btn cancel" href="${ex ? '#/r/' + esc(ex.id) : '#/'}">Cancel</a></p>
+        <a class="btn cancel" href="${cancelHref}">Cancel</a></p>
       <label class="f">Title</label><input name="title" required value="${esc(ex ? v.title : shared.title)}">
       <label class="f">Category</label>
       <div class="row" style="margin-top:0"><select name="category" style="flex:1">${cats.map(c => `<option${v.category === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
@@ -376,12 +438,12 @@ async function add(params, ex) {
       <div class="row" style="margin-top:0"><input name="sourceUrl" type="url" value="${esc(ex ? v.sourceUrl : shared.url)}" style="flex:1;min-width:180px">
         <button class="btn" id="reload" type="button" hidden>↻ Reload from link</button></div>
       <p><button class="btn primary" type="submit">${ex ? 'Save changes' : 'Save recipe'}</button>
-        <a class="btn cancel" href="${ex ? '#/r/' + esc(ex.id) : '#/'}">Cancel</a></p>
+        <a class="btn cancel" href="${cancelHref}">Cancel</a></p>
     </form>`;
   const f = $app.querySelector('#f'), msg = $app.querySelector('#impmsg'), impBtn = $app.querySelector('#imp');
   const saveLabel = ex ? 'Save changes' : 'Save recipe';
   // Cancel asks first only when there's something typed that would be lost.
-  const dirty = () => ex ? false : ['title', 'ingredients', 'steps', 'summary', 'notes'].some(k => f.elements[k].value.trim());
+  const dirty = () => (ex || intake) ? false : ['title', 'ingredients', 'steps', 'summary', 'notes'].some(k => f.elements[k].value.trim());
   $app.querySelectorAll('a.cancel').forEach(a => a.addEventListener('click', e => {
     if (dirty() && !confirm('Discard this recipe? Nothing has been saved yet.')) e.preventDefault();
   }));
@@ -483,7 +545,7 @@ async function add(params, ex) {
   // ----- photo / PDF scan (Google Drive OCR, done in the Apps Script) -----
   const fileEl = $app.querySelector('#file');
   // Fills the form from a file-based result (upload, Drive inbox pick, or pasted Drive link).
-  applyScanned = async d => {
+  applyScanned = async (d, note) => {
     const r = d.recipe;
     const dup = await findDup('', r.title);
     if (dup && !confirm(`You already have a recipe called “${dup.r.title}”. Is this a different one? OK = fill the form anyway, Cancel = skip.`)) {
@@ -498,9 +560,11 @@ async function add(params, ex) {
     set('sourceName', 'Import');
     if (d.fileUrl) set('sourceUrl', d.fileUrl);
     $app.querySelector('#rawtxt').textContent = d.text || ''; $app.querySelector('#raw').hidden = !d.text;
-    msg.textContent = 'Read the file — this is rarely perfect, so check every line before saving.';
+    msg.textContent = note || 'Read the file — this is rarely perfect, so check every line before saving.';
     window.scrollTo(0, 0);
   };
+  // Opened from the Review tab: fill the form from the queued email.
+  if (intake) applyScanned(intake.data, 'From an email in your Review queue — clean it up, then save to post it.');
   // Text shared from another app (e.g. a recipe selected in Gmail): read it straight away.
   if (shared.text) {
     if (!Cfg.url) msg.textContent = 'Connect the Google Sheet first — reading shared text needs it.';
@@ -568,7 +632,12 @@ async function add(params, ex) {
     try {
       const dup = ex ? null : await findDup(rec.sourceUrl, rec.title);
       if (dup && !confirm(`“${dup.r.title}” is already in your recipes. Save another copy anyway?`)) { setBtns(false, saveLabel); return; }
-      await Store.save(rec); location.hash = '#/r/' + rec.id; }
+      await Store.save(rec);
+      if (intake) {   // posted from the Review queue: take it off the queue and go back for the next one
+        api({ action: 'intakemark', id: intake.id, status: 'posted' }).catch(() => {});
+        let left = 0; try { left = Math.max(0, (+localStorage.getItem('recipes.badge') || 1) - 1); } catch (e) {}
+        setBadge(left); toast('Posted to your recipes'); location.hash = '#/review';
+      } else location.hash = '#/r/' + rec.id; }
     catch (err) {
       setBtns(false, saveLabel);
       if (err instanceof AuthError) return settings('That passcode didn’t work. Check it and try again.');
@@ -595,6 +664,8 @@ async function route() {
   const h = location.hash || '#/';
   window.scrollTo(0, 0);
   try {
+    document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.t === (h.startsWith('#/review') ? 'review' : h.startsWith('#/add') || h.startsWith('#/edit') ? '' : 'home')));
+    if (h.startsWith('#/review')) return await review();
     if (h.startsWith('#/settings')) return settings();
     if (h.startsWith('#/r/')) return await recipe(decodeURIComponent(h.slice(4)));
     if (h.startsWith('#/edit/')) {
@@ -627,4 +698,6 @@ window.addEventListener('hashchange', route);
 })();
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+try { const b = +localStorage.getItem('recipes.badge'); if (b) setBadge(b); } catch (e) {}
 route();
+refreshBadge();

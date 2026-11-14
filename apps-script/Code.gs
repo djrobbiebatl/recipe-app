@@ -23,6 +23,10 @@ function doPost(e) {
   if (req.action === 'scan') return scan_(req.data, req.mime);
   if (req.action === 'upload') return upload_(req.data, req.mime);
   if (req.action === 'parse') return parseText_(req.text);
+  if (req.action === 'intakesync') return intakeSyncAction_();
+  if (req.action === 'intakecount') return intakeCountAction_();
+  if (req.action === 'intakeget') return intakeGetAction_(req.id);
+  if (req.action === 'intakemark') return intakeMarkAction_(req.id, req.status);
   if (req.action === 'drivelist') return driveList_();
   if (req.action === 'driveimport') return driveImport_(req.id);
   return out_({ ok: false, error: 'unknown action' });
@@ -41,6 +45,113 @@ function delete_(id) {
     return out_({ ok: true });
   } finally { lock.releaseLock(); }
 }
+
+// ---------- email intake: forward a recipe to yourname+recipes@gmail.com, review it later in the app ----------
+// Needs: Services > Gmail API added to this project. Reads mail only (never sends, deletes or changes anything).
+const INTAKE_COLS = ['id', 'from', 'subject', 'date', 'text', 'status', 'added'];
+
+function intakeSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName('Intake');
+  if (!sh) {
+    sh = ss.insertSheet('Intake');
+    sh.getRange(1, 1, 1, INTAKE_COLS.length).setNumberFormat('@').setValues([INTAKE_COLS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function intakeRows_() {
+  const sh = intakeSheet_();
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return [];
+  return sh.getRange(2, 1, n, INTAKE_COLS.length).getValues().map(function (r, i) {
+    return { row: i + 2, id: String(r[0]), from: String(r[1]), subject: String(r[2]), date: String(r[3]), text: String(r[4]), status: String(r[5] || 'pending') };
+  });
+}
+
+function intakeAddress_() {
+  const addr = String(Gmail.Users.getProfile('me').emailAddress);
+  const at = addr.lastIndexOf('@');
+  return addr.slice(0, at) + '+recipes' + addr.slice(at);
+}
+
+/** Pulls new forwarded emails from Gmail into the Intake tab (max 10 per run). Returns how many were added. */
+function intakeSync_() {
+  const plus = intakeAddress_();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    const rows = intakeRows_();
+    const known = {};
+    rows.forEach(function (r) { known[r.id] = true; });
+    const pending = rows.filter(function (r) { return r.status === 'pending'; }).length;
+    const q = '(to:' + plus + ' OR deliveredto:' + plus + ' OR label:recipe-intake)';
+    const res = Gmail.Users.Messages.list('me', { q: q, maxResults: 60 });
+    const sh = intakeSheet_();
+    let added = 0;
+    (res.messages || []).forEach(function (m) {
+      if (known[m.id] || added >= 10 || pending + added >= 150) return;
+      const g = Gmail.Users.Messages.get('me', m.id, { format: 'raw' });
+      const raw = Utilities.newBlob(Utilities.base64DecodeWebSafe(g.raw)).getDataAsString('UTF-8');
+      const text = emlText_(raw).slice(0, 40000);
+      const headers = raw.replace(/\r\n/g, '\n').split('\n\n')[0].replace(/\n[ \t]+/g, ' ');
+      const from = decodeWords_((headers.match(/^From:[ \t]*(.*)$/mi) || [])[1] || '').slice(0, 200);
+      const empty = text.replace(/\s/g, '').length < 20;
+      const row = [m.id, from, text.split('\n')[0].slice(0, 200), new Date(Number(g.internalDate)).toISOString(), text, empty ? 'skipped' : 'pending', new Date().toISOString()];
+      const at = sh.getLastRow() + 1;
+      sh.getRange(at, 1, 1, INTAKE_COLS.length).setNumberFormat('@').setValues([row]);
+      added++;
+    });
+    return added;
+  } finally { lock.releaseLock(); }
+}
+
+function intakeGmailError_(e) {
+  const msg = String(e && e.message || e);
+  if (/Gmail is not defined/i.test(msg)) return 'The Gmail API service isn\'t added to the script yet (Services > + > Gmail API).';
+  if (/permission|authori|insufficient/i.test(msg)) return 'The script needs permission to read Gmail. Run "authorize" in Apps Script, then redeploy.';
+  return 'Couldn\'t check email (' + msg.slice(0, 120) + ')';
+}
+
+function intakeSyncAction_() {
+  try { intakeSync_(); } catch (e) { return out_({ ok: false, error: intakeGmailError_(e) }); }
+  const items = intakeRows_().filter(function (r) { return r.status === 'pending'; }).reverse().map(function (r) {
+    return { id: r.id, from: r.from, subject: r.subject, date: r.date, snippet: r.text.split('\n').slice(1).join(' ').replace(/\s+/g, ' ').slice(0, 180) };
+  });
+  let address = '';
+  try { address = intakeAddress_(); } catch (e) { /* shown only as a convenience */ }
+  return out_({ ok: true, address: address, items: items });
+}
+
+function intakeCountAction_() {
+  return out_({ ok: true, count: intakeRows_().filter(function (r) { return r.status === 'pending'; }).length });
+}
+
+function intakeGetAction_(id) {
+  const r = intakeRows_().filter(function (x) { return x.id === String(id); })[0];
+  if (!r) return out_({ ok: false, error: 'That email isn\'t in the queue any more' });
+  return out_({ ok: true, text: r.text.slice(0, 20000), fileUrl: '', from: r.from, recipe: parseScan_(r.text) });
+}
+
+function intakeMarkAction_(id, status) {
+  if (['posted', 'dismissed', 'pending'].indexOf(status) < 0) return out_({ ok: false, error: 'bad status' });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const r = intakeRows_().filter(function (x) { return x.id === String(id); })[0];
+    if (r) intakeSheet_().getRange(r.row, 6).setValue(status);
+    return out_({ ok: true });
+  } finally { lock.releaseLock(); }
+}
+
+/** Optional: run once from the editor so new emails are collected every 10 minutes even if the app is closed. */
+function setupIntakeTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'intakeTick_') ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('intakeTick_').timeBased().everyMinutes(10).create();
+  Logger.log('Email intake will now check every 10 minutes.');
+}
+function intakeTick_() { try { intakeSync_(); } catch (e) { /* the app shows errors when you open Review */ } }
 
 // ---------- import from Drive: a "Recipe Inbox" folder to pick from, or a pasted Drive/Docs link ----------
 const INBOX_NAME = 'Recipe Inbox';
@@ -124,6 +235,7 @@ function authorize() {
   UrlFetchApp.fetch('https://example.com');
   const d = DocumentApp.create('authorize-test (safe to delete)');
   DriveApp.getFileById(d.getId()).setTrashed(true);
+  try { Gmail.Users.getProfile('me'); } catch (e) { Logger.log('Gmail not set up yet: add Services > Gmail API, then run authorize again. (' + e.message + ')'); }
   Logger.log('Authorized. Now redeploy: Deploy > Manage deployments > edit > New version.');
 }
 
@@ -198,13 +310,38 @@ function emlText_(raw) {
   raw = String(raw).replace(/\r\n/g, '\n');
   const hdrEnd = raw.indexOf('\n\n');
   const hdr = (hdrEnd < 0 ? raw : raw.slice(0, hdrEnd)).replace(/\n[ \t]+/g, ' ');
-  const subj = decodeWords_(((hdr.match(/^Subject:[ \t]*(.*)$/mi) || [])[1] || '')).replace(/^\s*((fwd?|re):\s*)+/i, '').trim();
+  const rawSubj = decodeWords_(((hdr.match(/^Subject:[ \t]*(.*)$/mi) || [])[1] || '')).trim();
+  let subj = rawSubj.replace(/^\s*((fwd?|fw|re):\s*)+/i, '').trim();
   const parts = mimePart_(raw);
   let body = parts.plain || htmlToText_(parts.html || '');
   body = body.replace(/\n{3,}/g, '\n\n').trim();
+  const fw = stripForwarded_(body);
+  body = fw.body;
+  if (fw.subject && (!subj || /^\s*(fwd?|fw):/i.test(rawSubj))) subj = fw.subject;   // the original email's subject is the better title
   const firstLine = body.split('\n')[0].trim().toLowerCase();
   if (subj && firstLine === subj.toLowerCase()) body = body.split('\n').slice(1).join('\n').trim();   // body repeats the subject
   return (subj ? subj + '\n' : '') + body;
+}
+
+/**
+ * A forwarded email looks like: [forwarder's note] / "---------- Forwarded message ---------" / From: Date: Subject: To: / [original].
+ * Returns the original's body (header block removed), its subject, and keeps a long forwarder note at the end.
+ */
+function stripForwarded_(body) {
+  const lines = String(body).split('\n');
+  const mi = lines.findIndex(function (l) { return /^\W*(-{2,}\s*(forwarded message|original message)\s*-{2,}|begin forwarded message:?)\W*$/i.test(l.trim()); });
+  if (mi < 0) return { body: body, subject: '' };
+  let j = mi + 1, subject = '';
+  while (j < lines.length && j < mi + 16) {
+    const l = lines[j].trim();
+    const hm = l.match(/^\W*(From|Date|Sent|To|Cc|Bcc|Reply-To|Subject)\W*:\s*(.*)$/i);
+    if (hm) { if (/^subject$/i.test(hm[1])) subject = hm[2].replace(/^\s*((fwd?|fw|re):\s*)+/i, '').trim(); j++; }
+    else if (!l) j++;
+    else break;
+  }
+  const note = lines.slice(0, mi).join('\n').trim();
+  const rest = lines.slice(j).join('\n').trim();
+  return { body: note.length > 200 ? rest + '\n\n' + note : rest, subject: subject };
 }
 
 /** Walks a MIME message and returns the first text/plain and text/html bodies, decoded. */
