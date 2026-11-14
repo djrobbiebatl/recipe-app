@@ -118,6 +118,7 @@ async function home() {
   const all = await Store.list(true);
   let q = '', cat = '';
   $app.innerHTML = `
+    ${Cfg.url ? '' : '<div class="note">⚠️ Demo mode — not connected to the Google Sheet. Recipes saved now stay on this device only. Close and reopen the app to load the latest version.</div>'}
     <input id="q" type="search" placeholder="Search recipes or ingredients…" autocomplete="off">
     <div class="chips" id="chips"></div>
     <div class="grid" id="grid"></div>`;
