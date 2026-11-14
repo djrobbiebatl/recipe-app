@@ -228,7 +228,7 @@ async function recipe(id) {
   $app.innerHTML = `
     <a href="#/" class="noprint">← All recipes</a>
     <h1 class="titlerow"><span>${esc(r.title)}</span><button class="star big noprint ${r.favorite ? 'on' : ''}" id="fav" title="Favorite" aria-label="Favorite">${r.favorite ? '★' : '☆'}</button></h1>
-    <div class="muted">${esc(r.category)} · Source: ${src ? `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(r.sourceName || src)}</a>${/(^|\.)(drive|docs)\.google\.com\//i.test(src.replace(/^https?:\/\//i, '')) ? '' : `<span class="onlyprint"> — ${esc(src)}</span>`}` : esc(r.sourceName)}</div>
+    <div class="muted">${esc(r.category)}<span class="noprint"> · Source: ${src ? `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(r.sourceName || src)}</a>` : esc(r.sourceName)}</span></div>
     ${r.image ? `<img class="hero" src="${esc(safeUrl(r.image))}" alt="" referrerpolicy="no-referrer">` : ''}
     <p>${esc(r.summary)}</p>
     <div class="row facts">
@@ -241,6 +241,7 @@ async function recipe(id) {
       <button class="btn" id="del">🗑️ Delete</button>
       ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" checked style="width:auto"> with picture</label>' : ''}
     </div>
+    ${preheatLine(r.steps) ? `<p class="preheat">🔥 ${esc(preheatLine(r.steps))}</p>` : ''}
     <div class="two">
       <section>
         <h2>Ingredients</h2>
@@ -286,11 +287,26 @@ async function recipe(id) {
     });
     if (!items.length) return toast('Tick the ingredients you need first');
     const text = items.join('\n');
-    // Google Keep has no public API for personal accounts: use the share sheet, then fall back to clipboard.
-    try { if (navigator.share) { await navigator.share({ title: 'Shopping list – ' + r.title, text }); return; } } catch (e) { if (e.name === 'AbortError') return; }
-    try { await navigator.clipboard.writeText(text); toast('Copied — paste into Google Keep'); } catch (e) { prompt('Copy this list:', text); }
+    // Phones/tablets: the share sheet (pick Google Keep). Computers: copy, because Windows' share box only offers
+    // Nearby Sharing / Outlook / Copilot. Google Keep has no public API for personal accounts.
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
+    if (isMobile && navigator.share) {
+      try { await navigator.share({ title: 'Shopping list – ' + r.title, text }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    }
+    try { await navigator.clipboard.writeText(text); toast('List copied — paste it into an email or note'); } catch (e) { prompt('Copy this list:', text); }
   };
   drawIng();
+}
+
+// Pulls "Preheat the oven to 425°F." style sentences out of the steps so they can sit above the ingredients.
+function preheatLine(steps) {
+  const found = [];
+  for (const s of steps || []) {
+    for (const sentence of String(s).split(/(?<=[.!?])\s+/)) {
+      if (/\bpre-?heat(ed|ing)?\b|\bheat (the |your )?(oven|grill|air fryer|broiler)\b/i.test(sentence) && !found.includes(sentence.trim())) found.push(sentence.trim());
+    }
+  }
+  return found.slice(0, 2).join(' ');
 }
 
 const ingText = i => ((i.amt == null ? '' : fmtAmt(i.amt)) + ' ' + (i.unit || '') + ' ' + i.item).replace(/\s+/g, ' ').trim();

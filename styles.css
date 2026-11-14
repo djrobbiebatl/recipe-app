@@ -49,6 +49,7 @@ label.f{display:block;margin:12px 0 4px;font-weight:600}
 .cols3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .facts{gap:22px}
 p.notes{white-space:pre-wrap}
+p.preheat{font-weight:700;font-size:1.2rem;margin:10px 0}
 table.nut{border-collapse:collapse;margin:8px 0}
 table.nut td{padding:4px 18px 4px 0;border-bottom:1px solid var(--line)}
 table.nut td:last-child{font-weight:600}
@@ -78,5 +79,6 @@ table.nut td:last-child{font-weight:600}
   table.ing tr.missing td{color:#000}
   ol.steps li{margin-bottom:8pt}
   p.notes{margin:4pt 0}
+  p.preheat{font-size:13pt;margin:8pt 0}
   table.nut td{border-bottom:1px solid #ccc}
 }
