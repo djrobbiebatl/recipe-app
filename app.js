@@ -313,7 +313,9 @@ async function add(params, ex) {
       <label class="f">Steps — one per line</label><textarea name="steps" rows="6" required>${esc((v.steps || []).join('\n'))}</textarea>
       <label class="f">Nutrition (optional) — one per line, like “Calories: 250”</label><textarea name="nutrition" rows="4">${esc(v.nutrition)}</textarea>
       <label class="f">Source name</label><input name="sourceName" value="${esc(v.sourceName)}">
-      <label class="f">Source link</label><input name="sourceUrl" type="url" value="${esc(ex ? v.sourceUrl : shared.url)}">
+      <label class="f">Source link</label>
+      <div class="row" style="margin-top:0"><input name="sourceUrl" type="url" value="${esc(ex ? v.sourceUrl : shared.url)}" style="flex:1;min-width:180px">
+        <button class="btn" id="reload" type="button" hidden>↻ Reload from link</button></div>
       <p><button class="btn primary" type="submit">${ex ? 'Save changes' : 'Save recipe'}</button>
         ${ex ? `<a class="btn" href="#/r/${esc(ex.id)}">Cancel</a>` : ''}</p>
     </form>`;
@@ -349,6 +351,36 @@ async function add(params, ex) {
   };
   impBtn.onclick = runImport;
   if (shared.url) runImport();
+
+  // ----- reload a recipe from its web link (only offered for real web pages, not saved scan files) -----
+  const reloadBtn = $app.querySelector('#reload'), srcEl = f.elements.sourceUrl;
+  const webLink = () => {
+    try { const u = new URL(srcEl.value.trim()); return /^https?:$/.test(u.protocol) && !/(^|\.)(drive|docs)\.google\.com$/.test(u.hostname) ? u.href : ''; }
+    catch (e) { return ''; }
+  };
+  const syncReload = () => { reloadBtn.hidden = !webLink(); };
+  srcEl.addEventListener('input', syncReload); syncReload();
+  reloadBtn.onclick = async () => {
+    const url = webLink(); if (!url) return;
+    if (!Cfg.url) { msg.textContent = 'Connect the Google Sheet first — reloading needs it.'; return; }
+    if (!confirm('Reload this recipe from its web link?\n\nThis replaces the title, ingredients, steps, times and other details in this form with a fresh copy from the website. Anything you changed here will be lost. Nothing is saved until you press Save.')) return;
+    msg.textContent = 'Reloading from the link…'; reloadBtn.disabled = true;
+    try {
+      const r = (await api({ action: 'import', url })).recipe;
+      if (!(r.ingredients && r.ingredients.length)) { msg.textContent = 'That page has no recipe data I can read, so nothing was changed.'; return; }
+      const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
+      set('title', r.title); set('sourceName', r.sourceName); set('servings', r.servings); set('image', r.image); set('summary', r.summary);
+      set('prepTime', r.prepTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
+      if (r.image) showPrev(r.image);
+      if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
+      set('ingredients', r.ingredients.join('\n')); set('steps', (r.steps || []).join('\n'));
+      msg.textContent = 'Reloaded from the link — check it over, then save.';
+      window.scrollTo(0, 0);
+    } catch (e) {
+      if (e instanceof AuthError) return settings('Enter the shared passcode first.');
+      msg.textContent = 'Couldn’t reload: ' + e.message;
+    } finally { reloadBtn.disabled = false; }
+  };
 
   // ----- new category, recipe picture -----
   $app.querySelector('#newcat').onclick = () => {
