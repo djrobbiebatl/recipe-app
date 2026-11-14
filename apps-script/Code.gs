@@ -212,6 +212,7 @@ function import_(url) {
   if (!/^https?:\/\/[^\s]+$/i.test(String(url || ''))) return out_({ ok: false, error: 'That doesn\'t look like a web link' });
   const driveId = driveIdFromUrl_(url);
   if (driveId) return driveImport_(driveId);
+  url = stripTracking_(url);
   let html;
   try {
     const res = UrlFetchApp.fetch(url, {
@@ -372,15 +373,53 @@ function cleanEmailBody_(body) {
  */
 function nutLines_(arr) {
   const word = /\b(calories?|kcal|energy|fat|saturated|trans|cholesterol|sodium|salt|carbohydrates?|carbs?|fib(?:er|re)|sugars?|protein|vitamin|calcium|iron|potassium|serving|servings|daily value|amount)\b/i;
-  const value = /^[\d.,]+\s*(g|mg|mcg|kcal|cal|oz|%)?\s*(\d+\s*%)?$/i;
+  const value = /^[\d.,]+(\s*[-–]\s*[\d.,]+)?\s*(g|mg|mcg|kcal|cal|oz|%)?\s*(\d+\s*%)?$/i;   // "120", "3 g", "28-32g", "11%"
   const kept = [];
   for (let i = 0; i < arr.length; i++) {
-    const l = arr[i].trim();
-    if (word.test(l) || value.test(l)) kept.push(l);
-    else if (!kept.length && !/\d/.test(l) && l.split(/\s+/).length <= 4) continue;   // a lead-in such as "Per serving:"
+    const l = arr[i].trim().replace(/^[•·]\s*/, '');
+    if (!l) continue;
+    if ((word.test(l) && l.split(/\s+/).length <= 8 && !/[.!?]$/.test(l)) || value.test(l)) kept.push(l);   // a sentence about nutrition isn't a nutrition fact
+    else if (!kept.length && !/\d/.test(l) && l.split(/\s+/).length <= 4) continue;   // a lead-in such as "Per serving:" or "Nutrition Component"
     else break;
   }
-  return kept;
+  // Tables come through as a label line then a value line: "Calories" / "320-380" -> "Calories: 320-380".
+  const out = [];
+  for (let i = 0; i < kept.length; i++) {
+    if (!value.test(kept[i]) && !/\d/.test(kept[i]) && i + 1 < kept.length && value.test(kept[i + 1])) { out.push(kept[i] + ': ' + kept[i + 1]); i++; }
+    else out.push(kept[i]);
+  }
+  return out;
+}
+
+/**
+ * Web-article lists: sub-headings ("Honey Garlic Sauce", "Prep the chicken") sit between bulleted items. When a section is
+ * mostly bullets, drop the short capitalised non-bullet lines (the sub-headings) and strip the bullet marks.
+ */
+function listLines_(arr) {
+  const bullet = /^[•·]\s*/;
+  if (arr.filter(function (l) { return bullet.test(l); }).length < 2) return arr;
+  return arr.filter(function (l) {
+    return bullet.test(l) || !(/^[A-Z0-9(]/.test(l) && l.split(/\s+/).length <= 8 && !/[.!?]$/.test(l));
+  }).map(function (l) { return l.replace(bullet, ''); });
+}
+
+/** Some recipe blogs list each ingredient as: Name / "Quantity: 2 tbsp olive oil" / "Notes: ...". Returns the plain ingredient lines, or null if not this style. */
+function qtyFormat_(arr) {
+  if (!arr.some(function (l) { return /^quantity\s*:/i.test(l); })) return null;
+  const out = [];
+  let name = '', used = true;
+  const loose = /^(to taste|as needed|optional|for serving|for garnish|desired|a pinch|pinch|dash)\b/i;
+  arr.forEach(function (l) {
+    const q = l.match(/^quantity\s*:\s*(.*)$/i);
+    if (q) {
+      const t = q[1].replace(/[.;]\s*$/, '').trim();
+      out.push(loose.test(t) && name ? name + ', ' + t : (t || name));   // "Salt & pepper" + "to taste"
+      used = true;
+    } else if (/^notes?\s*:/i.test(l)) { /* notes belong to the recipe author, not the ingredient line */ }
+    else { if (name && !used) out.push(name); name = l; used = false; }
+  });
+  if (name && !used) out.push(name);
+  return out.filter(String);
 }
 
 /** Drops a sign-off and everything after it ("Thanks, Jo", phone, address, "Sent from my iPhone") from the end of scanned lines. */
@@ -497,10 +536,11 @@ function parseScan_(text) {
   const raw = String(text).replace(/\r/g, '').split('\n').map(function (l) { return l.replace(/[ \t]+/g, ' ').trim(); });
   const lines = raw.filter(String);
   trimSignature_(lines);
-  const isIng = function (l) { return /^(ingredients?)\s*:?$/i.test(l); };
-  const isDir = function (l) { return /^(directions?|instructions?|method|steps?|preparation|procedure)\s*:?$/i.test(l); };
+  // Headings may carry a little extra: "Ingredients (Serves 4)", "Instructions:", "Cooking Directions". Not sentences, though.
+  const isIng = function (l) { return /^ingredients?\b[^.!?]{0,40}$/i.test(l) && !/^\W/.test(l); };
+  const isDir = function (l) { return /^((cooking|baking) )?(directions?|instructions?|method|steps?|preparation|procedure)\b[^.!?]{0,40}$/i.test(l) && !/^\W/.test(l); };
   // Nutrition block (usually last): peel it off first so it doesn't leak into the steps.
-  const nutI = lines.findIndex(function (l) { return /^nutrition(al)?( information| facts| info)?\s*:?$/i.test(l); });
+  const nutI = lines.findIndex(function (l) { return /^nutrition(al)?( information| facts| info| value)?\b[^.!?]{0,40}$/i.test(l) && !/^\W/.test(l); });
   const nutrition = nutI >= 0 ? nutLines_(lines.slice(nutI + 1)).join('\n') : '';
   if (nutI >= 0) lines.length = nutI;
   const timeOf = function (re) { const m = text.match(re); return m ? m[1].trim().slice(0, 30) : ''; };
@@ -519,8 +559,9 @@ function parseScan_(text) {
   let ing = [], stepsRaw = [], summary = '', narIngs = null, narSteps = null;
   if (ingI >= 0 || dirI >= 0) {
     const ingEnd = (dirI > ingI) ? dirI : lines.length;
-    if (ingI >= 0) ing = lines.slice(ingI + 1, ingEnd);
-    if (dirI >= 0) stepsRaw = lines.slice(dirI + 1);
+    if (ingI >= 0) ing = listLines_(lines.slice(ingI + 1, ingEnd));
+    if (ingI >= 0) { const q = qtyFormat_(ing); if (q) ing = q; }
+    if (dirI >= 0) stepsRaw = listLines_(lines.slice(dirI + 1));
     else stepsRaw = [];
     const head = lines.slice(1, ingI >= 0 ? ingI : dirI);
     summary = head.filter(function (l) { return !/^(serves|servings?|yields?|makes|prep|cook|total)/i.test(l); }).join(' ').slice(0, 300);
@@ -548,6 +589,10 @@ function parseScan_(text) {
     if (ings.length && /^[a-z(]/.test(l) && !startsQty(l)) ings[ings.length - 1] += ' ' + l; else ings.push(l);
   });
   if (narIngs) { ings.length = 0; narIngs.forEach(function (x) { ings.push(x); }); }
+  // "11/2 lbs" is how some sites write "1 1/2 lbs": a digit glued to a proper fraction.
+  for (let i = 0; i < ings.length; i++) {
+    ings[i] = ings[i].replace(/^([1-9])([1-9])\/([2-9])\b/, function (m, a, b, c) { return Number(b) < Number(c) ? a + ' ' + b + '/' + c : m; });
+  }
   // Steps: numbered markers start new steps; otherwise join wrapped lines until a sentence ends.
   const steps = narSteps || [];
   if (!narSteps) stepsRaw.forEach(function (l) {
@@ -639,6 +684,9 @@ function extract_(html, url) {
     try { node = findRecipe_(JSON.parse(m[1].trim())); } catch (e) { /* skip malformed block */ }
   }
   if (!node) {
+    // No embedded recipe card: many blogs are just an article with an "Ingredients" list and "Instructions" steps. Read it as text.
+    const art = articleRecipe_(html, url, og, site);
+    if (art) return { found: true, recipe: art };
     return { found: false, recipe: { title: og('og:title'), summary: og('og:description'), image: og('og:image'),
       sourceName: site, sourceUrl: url, ingredients: [], steps: [] } };
   }
@@ -650,11 +698,52 @@ function extract_(html, url) {
   return { found: true, recipe: {
     title: clean_(node.name), summary: clean_(node.description), image: String(img || og('og:image') || ''),
     sourceName: site, sourceUrl: url, author: clean_(author || ''),
-    servings: yieldNum ? Number(yieldNum) : 4, category: guessCategory_(cat),
+    servings: yieldNum ? Number(yieldNum) : 4, category: guessCategory_(cat) + extraTags_(cat),
     prepTime: dur_(node.prepTime), cookTime: dur_(node.cookTime), totalTime: dur_(node.totalTime), nutrition: nut_(node.nutrition),
     ingredients: [].concat(node.recipeIngredient || node.ingredients || []).map(clean_).filter(String),
     steps: steps_(node.recipeInstructions)
   } };
+}
+
+/** ", Crock Pot" / ", Instant Pot" when the title or keywords say so (recipes can carry several categories). */
+function extraTags_(s) {
+  return (/slow[- ]?cooker|crock[- ]?pot/i.test(s) ? ', Crock Pot' : '') + (/instant[- ]?pot|pressure cooker/i.test(s) ? ', Instant Pot' : '');
+}
+
+/** The part of a page that holds the article: marked up as the article body, or the first <article>/<main>. */
+function articleHtml_(html) {
+  const h = html.replace(/<!--[\s\S]*?-->/g, '').replace(/<(nav|footer|aside|form|header)\b[\s\S]*?<\/\1>/gi, '');
+  const marks = [/itemprop=["']articleBody["']/i, /class=["'][^"']*\b(entry-content|post-content|article-content|recipe-content|post-body)\b[^"']*["']/i, /<article\b/i, /<main\b/i];
+  for (let i = 0; i < marks.length; i++) { const m = h.match(marks[i]); if (m) return h.slice(m.index, m.index + 150000); }
+  return h.slice(0, 150000);
+}
+
+/** Title without the " - Site Name" tail that sites add to og:title. */
+function cleanTitle_(t) { return clean_(t).replace(/\s+[-|–—]\s+[^-|–—]{2,40}$/, '').trim(); }
+
+/** Reads a plain blog post as a recipe. Returns null unless it clearly has an ingredient list and steps. */
+function articleRecipe_(html, url, og, site) {
+  const title = cleanTitle_(og('og:title') || ((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || ''));
+  if (!title) return null;
+  let lines = htmlToText_(articleHtml_(html)).split('\n');
+  const cut = lines.findIndex(function (l) { return /^(you may also like|related( posts| recipes| articles)?|see more|previous article|leave a (reply|comment)|post navigation|share this)\b/i.test(l.trim()); });
+  if (cut >= 0) lines = lines.slice(0, cut);
+  const r = parseScan_(title + '\n' + lines.join('\n').replace(/\n{3,}/g, '\n\n'));
+  if (r.ingredients.length < 2 || !r.steps.length) return null;
+  r.title = title;
+  r.summary = og('og:description') || r.summary;
+  r.image = og('og:image');
+  r.sourceName = site; r.sourceUrl = url;
+  r.category = guessCategory_(title + ' ' + r.summary) + extraTags_(title + ' ' + r.summary);
+  return r;
+}
+
+/** Removes tracking junk (?fbclid=..., utm_*) so the saved source link is clean. */
+function stripTracking_(url) {
+  const m = String(url).match(/^([^?#]*)(\?[^#]*)?(#.*)?$/);
+  if (!m) return url;
+  const kept = (m[2] ? m[2].slice(1).split('&') : []).filter(function (p) { return p && !/^(utm_[^=]*|fbclid|gclid|igshid|mc_[^=]*|ref|ref_src)(=|$)/i.test(p); });
+  return m[1] + (kept.length ? '?' + kept.join('&') : '');
 }
 
 /** ISO-8601 duration ("PT1H15M") -> "1 hr 15 min". Anything else is passed through. */

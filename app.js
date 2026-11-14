@@ -484,7 +484,7 @@ async function add(params, ex) {
       set('servings', r.servings); set('image', r.image); set('summary', r.summary);
       set('prepTime', r.prepTime); set('cookTime', r.cookTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
       if (r.image) showPrev(r.image);
-      if (r.category) setTags([r.category]);
+      if (r.category) setTags(String(r.category).split(','));
       set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
       msg.textContent = found ? 'Imported — check it over, then save.'
         : 'That page has no recipe data I can read. I filled in what I could — add the rest by hand.';
@@ -575,7 +575,7 @@ async function add(params, ex) {
     const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
     set('title', r.title); set('servings', r.servings); set('summary', r.summary);
     set('prepTime', r.prepTime); set('cookTime', r.cookTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
-    if (r.category) setTags([r.category]);
+    if (r.category) setTags(String(r.category).split(','));
     set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
     // A file or shared text has no web page: mark it as an import, and link the saved original if there is one.
     set('sourceName', 'Import');
