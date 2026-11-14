@@ -352,7 +352,7 @@ async function add(params, ex) {
     <details id="raw" class="note" hidden><summary>Show the scanned text</summary><pre id="rawtxt" style="white-space:pre-wrap"></pre></details>
     <form id="f">
       <p class="savetop"><button class="btn primary" type="submit">${ex ? 'Save changes' : 'Save recipe'}</button>
-        ${ex ? `<a class="btn" href="#/r/${esc(ex.id)}">Cancel</a>` : ''}</p>
+        <a class="btn cancel" href="${ex ? '#/r/' + esc(ex.id) : '#/'}">Cancel</a></p>
       <label class="f">Title</label><input name="title" required value="${esc(ex ? v.title : shared.title)}">
       <label class="f">Category</label>
       <div class="row" style="margin-top:0"><select name="category" style="flex:1">${cats.map(c => `<option${v.category === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
@@ -376,10 +376,15 @@ async function add(params, ex) {
       <div class="row" style="margin-top:0"><input name="sourceUrl" type="url" value="${esc(ex ? v.sourceUrl : shared.url)}" style="flex:1;min-width:180px">
         <button class="btn" id="reload" type="button" hidden>↻ Reload from link</button></div>
       <p><button class="btn primary" type="submit">${ex ? 'Save changes' : 'Save recipe'}</button>
-        ${ex ? `<a class="btn" href="#/r/${esc(ex.id)}">Cancel</a>` : ''}</p>
+        <a class="btn cancel" href="${ex ? '#/r/' + esc(ex.id) : '#/'}">Cancel</a></p>
     </form>`;
   const f = $app.querySelector('#f'), msg = $app.querySelector('#impmsg'), impBtn = $app.querySelector('#imp');
   const saveLabel = ex ? 'Save changes' : 'Save recipe';
+  // Cancel asks first only when there's something typed that would be lost.
+  const dirty = () => ex ? false : ['title', 'ingredients', 'steps', 'summary', 'notes'].some(k => f.elements[k].value.trim());
+  $app.querySelectorAll('a.cancel').forEach(a => a.addEventListener('click', e => {
+    if (dirty() && !confirm('Discard this recipe? Nothing has been saved yet.')) e.preventDefault();
+  }));
   let applyScanned; // defined below, shared by file upload / Drive picker / pasted Drive links
   const runImport = async () => {
     const url = $app.querySelector('#iu').value.trim();
