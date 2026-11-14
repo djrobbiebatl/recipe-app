@@ -20,6 +20,7 @@ function doPost(e) {
   if (req.action === 'save') return save_(req.recipe, req.name);
   if (req.action === 'import') return import_(req.url);
   if (req.action === 'delete') return delete_(req.id);
+  if (req.action === 'scan') return scan_(req.data, req.mime);
   return out_({ ok: false, error: 'unknown action' });
 }
 
@@ -57,10 +58,90 @@ function import_(url) {
   return out_({ ok: true, found: r.found, recipe: r.recipe });
 }
 
-/** Run this once from the editor (select "authorize" > Run) to grant the "read web pages" permission. */
+/**
+ * Run this once from the editor (select "authorize" > Run) to grant the permissions for reading web
+ * pages and scanning photos/PDFs. Scanning also needs Services (+) > "Drive API" added to this project.
+ */
 function authorize() {
   UrlFetchApp.fetch('https://example.com');
+  const d = DocumentApp.create('authorize-test (safe to delete)');
+  DriveApp.getFileById(d.getId()).setTrashed(true);
   Logger.log('Authorized. Now redeploy: Deploy > Manage deployments > edit > New version.');
+}
+
+// ---------- photo / PDF scan: Google Drive turns the file into a Doc (with OCR), we read the text ----------
+function scan_(b64, mime) {
+  if (!b64 || !/^(image\/(jpeg|png|webp|gif)|application\/pdf)$/.test(String(mime))) return out_({ ok: false, error: 'Please use a photo (JPEG/PNG) or a PDF' });
+  let id = null;
+  try {
+    const blob = Utilities.newBlob(Utilities.base64Decode(b64), mime, 'recipe-scan');
+    const f = Drive.Files.create({ name: 'recipe-scan (temp)', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'en' });
+    id = f.id;
+    const text = DocumentApp.openById(id).getBody().getText();
+    if (!text || text.replace(/\s/g, '').length < 20) return out_({ ok: false, error: 'I couldn\'t find any readable text in that file' });
+    return out_({ ok: true, text: text.slice(0, 20000), recipe: parseScan_(text) });
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/Drive is not defined/i.test(msg)) return out_({ ok: false, error: 'The Drive API service isn\'t added to the script yet (Services > + > Drive API)' });
+    if (/permission|authori/i.test(msg)) return out_({ ok: false, error: 'The script needs permission to scan. Run "authorize" in Apps Script, then redeploy.' });
+    return out_({ ok: false, error: 'Scan failed (' + msg.slice(0, 120) + ')' });
+  } finally {
+    if (id) { try { DriveApp.getFileById(id).setTrashed(true); } catch (e2) { /* temp file cleanup is best-effort */ } }
+  }
+}
+
+/** Best-effort split of OCR text into title / summary / servings / ingredients / steps. */
+function parseScan_(text) {
+  const raw = String(text).replace(/\r/g, '').split('\n').map(function (l) { return l.replace(/[ \t]+/g, ' ').trim(); });
+  const lines = raw.filter(String);
+  const isIng = function (l) { return /^(ingredients?)\s*:?$/i.test(l); };
+  const isDir = function (l) { return /^(directions?|instructions?|method|steps?|preparation|procedure)\s*:?$/i.test(l); };
+  const ingI = lines.findIndex(isIng), dirI = lines.findIndex(isDir);
+  const startsQty = function (l) { return /^[•\-*·]?\s*(\d|[¼½¾⅓⅔⅛])/.test(l); };
+  const bullet = function (l) { return l.replace(/^[•\-*·]\s*/, ''); };
+
+  let title = lines[0] || '';
+  if (isIng(title) || isDir(title)) title = '';
+  let servings = 4;
+  const sv = text.match(/(?:serves|servings?|yields?|makes)\s*:?\s*(\d+)/i);
+  if (sv) servings = Number(sv[1]);
+
+  let ing = [], stepsRaw = [], summary = '';
+  if (ingI >= 0 || dirI >= 0) {
+    const ingEnd = (dirI > ingI) ? dirI : lines.length;
+    if (ingI >= 0) ing = lines.slice(ingI + 1, ingEnd);
+    if (dirI >= 0) stepsRaw = lines.slice(dirI + 1);
+    else stepsRaw = [];
+    const head = lines.slice(1, ingI >= 0 ? ingI : dirI);
+    summary = head.filter(function (l) { return !/^(serves|servings?|yields?|makes|prep|cook|total)/i.test(l); }).join(' ').slice(0, 300);
+    if (ingI < 0) { // only a directions heading: ingredient-looking lines before it
+      ing = lines.slice(1, dirI).filter(startsQty); summary = '';
+    }
+  } else { // no headings: quantity-looking lines are ingredients, the rest after them are steps
+    const first = lines.findIndex(function (l, i) { return i > 0 && startsQty(l); });
+    if (first > 0) {
+      let end = first; while (end < lines.length && (startsQty(lines[end]) || /^[a-z(]/.test(lines[end]))) end++;
+      ing = lines.slice(first, end); stepsRaw = lines.slice(end);
+    } else { stepsRaw = lines.slice(1); }
+  }
+
+  // Ingredients: re-join wrapped lines (a line starting lowercase belongs to the one above).
+  const ings = [];
+  ing.forEach(function (l) {
+    l = bullet(l);
+    if (!l) return;
+    if (ings.length && /^[a-z(]/.test(l) && !startsQty(l)) ings[ings.length - 1] += ' ' + l; else ings.push(l);
+  });
+  // Steps: numbered markers start new steps; otherwise join wrapped lines until a sentence ends.
+  const steps = [];
+  stepsRaw.forEach(function (l) {
+    const numbered = /^\d{1,2}[.)]\s*\S/.test(l);
+    const body = l.replace(/^\d{1,2}[.)]\s*/, '');
+    const prevDone = !steps.length || /[.!?)"”]$/.test(steps[steps.length - 1]);
+    if (numbered || prevDone) steps.push(body); else steps[steps.length - 1] += ' ' + body;
+  });
+  return { title: title.slice(0, 120), summary: summary, servings: servings, category: guessCategory_(title + ' ' + summary),
+           ingredients: ings, steps: steps };
 }
 
 function extract_(html, url) {

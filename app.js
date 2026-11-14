@@ -99,6 +99,24 @@ async function findDup(url, title) {
   const byTitle = t && all.find(r => r.title.trim().toLowerCase() === t);
   return byTitle ? { r: byTitle, by: 'title' } : null;
 }
+// Photos are shrunk before upload (phone shots are huge); PDFs go up as-is.
+const toB64 = blob => new Promise((res, rej) => {
+  const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = () => rej(new Error('Could not read the file')); fr.readAsDataURL(blob);
+});
+async function filePayload(file) {
+  if (file.type === 'application/pdf') {
+    if (file.size > 8 * 1024 * 1024) throw new Error('That PDF is over 8 MB');
+    return { mime: file.type, data: await toB64(file) };
+  }
+  if (!file.type.startsWith('image/')) throw new Error('Please choose a photo or a PDF');
+  let bmp;
+  try { bmp = await createImageBitmap(file); } catch (e) { throw new Error('Could not open that image (try a JPEG or PNG)'); }
+  const s = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+  return { mime: 'image/jpeg', data: await toB64(blob) };
+}
 const uid = () => 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
 function toast(msg) {
@@ -228,7 +246,13 @@ async function add(params) {
     <h1>Add a recipe</h1>
     <div class="row"><input id="iu" type="url" placeholder="Paste a recipe link…" value="${esc(shared.url)}" style="flex:1;min-width:200px">
       <button class="btn primary" id="imp" type="button">Import</button></div>
+    <div class="row">
+      <button class="btn" id="scan" type="button">📷 Scan photo or PDF</button>
+      <input id="file" type="file" accept="image/*,application/pdf" hidden>
+      <span class="muted">…or drag a photo / PDF anywhere on this page</span>
+    </div>
     <p id="impmsg" class="muted"></p>
+    <details id="raw" class="note" hidden><summary>Show the scanned text</summary><pre id="rawtxt" style="white-space:pre-wrap"></pre></details>
     <form id="f">
       <label class="f">Title</label><input name="title" required value="${esc(shared.title)}">
       <label class="f">Category</label><select name="category">${CATEGORIES.map(c => `<option>${esc(c)}</option>`).join('')}</select>
@@ -270,6 +294,37 @@ async function add(params) {
   };
   impBtn.onclick = runImport;
   if (shared.url) runImport();
+
+  // ----- photo / PDF scan (Google Drive OCR, done in the Apps Script) -----
+  const fileEl = $app.querySelector('#file');
+  const runScan = async file => {
+    if (!file) return;
+    if (!Cfg.url) { msg.textContent = 'Connect the Google Sheet first — scanning needs it.'; return; }
+    msg.textContent = 'Scanning… this can take 10–30 seconds.';
+    try {
+      const p = await filePayload(file);
+      const d = await api({ action: 'scan', mime: p.mime, data: p.data });
+      const r = d.recipe;
+      const dup = await findDup('', r.title);
+      if (dup && !confirm(`You already have a recipe called “${dup.r.title}”. Is this a different one? OK = fill the form anyway, Cancel = skip.`)) {
+        msg.innerHTML = `You already have: <a href="#/r/${esc(dup.r.id)}">${esc(dup.r.title)}</a>`; return;
+      }
+      const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
+      set('title', r.title); set('servings', r.servings); set('summary', r.summary);
+      if (CATEGORIES.includes(r.category)) set('category', r.category);
+      set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
+      $app.querySelector('#rawtxt').textContent = d.text || ''; $app.querySelector('#raw').hidden = !d.text;
+      msg.textContent = 'Scanned — scans are rarely perfect, so check every line before saving.';
+    } catch (e) {
+      if (e instanceof AuthError) return settings('Enter the shared passcode first.');
+      msg.textContent = 'Couldn’t scan: ' + e.message;
+    }
+  };
+  $app.querySelector('#scan').onclick = () => fileEl.click();
+  fileEl.onchange = () => { runScan(fileEl.files[0]); fileEl.value = ''; };
+  const stop = e => { e.preventDefault(); };
+  document.ondragover = stop;
+  document.ondrop = e => { e.preventDefault(); if (location.hash.startsWith('#/add')) runScan(e.dataTransfer.files[0]); };
   f.onsubmit = async e => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target));
