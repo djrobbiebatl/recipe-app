@@ -33,9 +33,19 @@ function import_(url) {
     });
     if (res.getResponseCode() >= 400) return out_({ ok: false, error: 'The site returned error ' + res.getResponseCode() });
     html = res.getContentText();
-  } catch (e) { return out_({ ok: false, error: 'Could not reach that page' }); }
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/permission|authori/i.test(msg)) return out_({ ok: false, error: 'The script needs permission to read web pages. In Apps Script, run the "authorize" function once, then redeploy.' });
+    return out_({ ok: false, error: 'Could not reach that page (' + msg.slice(0, 120) + ')' });
+  }
   const r = extract_(html, url);
   return out_({ ok: true, found: r.found, recipe: r.recipe });
+}
+
+/** Run this once from the editor (select "authorize" > Run) to grant the "read web pages" permission. */
+function authorize() {
+  UrlFetchApp.fetch('https://example.com');
+  Logger.log('Authorized. Now redeploy: Deploy > Manage deployments > edit > New version.');
 }
 
 function extract_(html, url) {
