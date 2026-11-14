@@ -183,7 +183,7 @@ async function home() {
     g.innerHTML = !hits.length ? '<p class="muted">No recipes found.</p>' : hits.map(r => view === 'list' ? `
       <a class="lrow" href="#/r/${esc(r.id)}">
         <div class="lthumb"${thumb(r.image)}>${r.image ? '' : '🍽️'}</div>
-        <div class="lbody"><b>${esc(r.title)}</b><div class="muted">${esc(r.category)} · serves ${esc(r.servings)}${r.totalTime ? ' · ' + esc(r.totalTime) : ''}</div></div>${star(r)}
+        <div class="lbody"><b>${esc(r.title)}</b><div class="muted">${esc(r.category)} · serves ${esc(r.servings)}</div>${r.prepTime || r.totalTime ? `<div class="muted">${r.prepTime ? 'Prep ' + esc(r.prepTime) : ''}${r.prepTime && r.totalTime ? ' · ' : ''}${r.totalTime ? 'Total ' + esc(r.totalTime) : ''}</div>` : ''}</div>${star(r)}
       </a>` : `
       <a class="card" href="#/r/${esc(r.id)}">
         <div class="img"${thumb(r.image)}>${r.image ? '' : '🍽️'}${star(r)}</div>
@@ -219,6 +219,7 @@ async function recipe(id) {
     </div>
     <div class="row tools">
       <button class="btn" id="print">🖨️ Print</button>
+      <a class="btn" href="#/edit/${esc(r.id)}">✏️ Edit</a>
       <button class="btn" id="del">🗑️ Delete</button>
       ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" checked style="width:auto"> with picture</label>' : ''}
     </div>
@@ -271,11 +272,18 @@ async function recipe(id) {
   drawIng();
 }
 
-async function add(params) {
+const ingText = i => ((i.amt == null ? '' : fmtAmt(i.amt)) + ' ' + (i.unit || '') + ' ' + i.item).replace(/\s+/g, ' ').trim();
+
+// One screen for both adding (ex = undefined) and editing (ex = the saved recipe).
+async function add(params, ex) {
   const shared = params || {};
   window.__shared = null; // one-shot, so coming back to Add later doesn't re-import
+  const v = ex || {};
+  const cats = allCats(await Store.list());
+  if (ex && ex.category && !cats.includes(ex.category)) cats.push(ex.category);
   $app.innerHTML = `
-    <h1>Add a recipe</h1>
+    <h1>${ex ? 'Edit recipe' : 'Add a recipe'}</h1>
+    <div id="importbox"${ex ? ' hidden' : ''}>
     <div class="row"><input id="iu" type="url" placeholder="Paste a recipe link…" value="${esc(shared.url)}" style="flex:1;min-width:200px">
       <button class="btn primary" id="imp" type="button">Import</button></div>
     <div class="row">
@@ -283,31 +291,34 @@ async function add(params) {
       <input id="file" type="file" accept="image/*,application/pdf" hidden>
       <span class="muted">…or drag a photo / PDF anywhere on this page</span>
     </div>
+    </div>
     <p id="impmsg" class="muted"></p>
     <details id="raw" class="note" hidden><summary>Show the scanned text</summary><pre id="rawtxt" style="white-space:pre-wrap"></pre></details>
     <form id="f">
-      <label class="f">Title</label><input name="title" required value="${esc(shared.title)}">
+      <label class="f">Title</label><input name="title" required value="${esc(ex ? v.title : shared.title)}">
       <label class="f">Category</label>
-      <div class="row" style="margin-top:0"><select name="category" style="flex:1">${allCats(await Store.list()).map(c => `<option>${esc(c)}</option>`).join('')}</select>
+      <div class="row" style="margin-top:0"><select name="category" style="flex:1">${cats.map(c => `<option${v.category === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
         <button class="btn" id="newcat" type="button">+ New category</button></div>
       <div class="cols3">
-        <div><label class="f">Servings</label><input name="servings" type="number" min="1" value="4"></div>
-        <div><label class="f">Prep time</label><input name="prepTime" placeholder="15 min"></div>
-        <div><label class="f">Total time</label><input name="totalTime" placeholder="1 hr"></div>
+        <div><label class="f">Servings</label><input name="servings" type="number" min="1" value="${esc(v.servings || 4)}"></div>
+        <div><label class="f">Prep time</label><input name="prepTime" placeholder="15 min" value="${esc(v.prepTime)}"></div>
+        <div><label class="f">Total time</label><input name="totalTime" placeholder="1 hr" value="${esc(v.totalTime)}"></div>
       </div>
       <label class="f">Picture</label>
-      <div class="row" style="margin-top:0"><input name="image" type="url" placeholder="Picture link, or upload one →" style="flex:1;min-width:180px">
+      <div class="row" style="margin-top:0"><input name="image" type="url" placeholder="Picture link, or upload one →" style="flex:1;min-width:180px" value="${esc(v.image)}">
         <button class="btn" id="pic" type="button">⬆️ Upload photo</button><input id="picfile" type="file" accept="image/*" hidden></div>
       <img id="prev" class="hero" alt="" hidden style="max-height:180px">
-      <label class="f">Summary</label><textarea name="summary" rows="2"></textarea>
-      <label class="f">Ingredients — one per line, like “2 cups flour”</label><textarea name="ingredients" rows="6" required></textarea>
-      <label class="f">Steps — one per line</label><textarea name="steps" rows="6" required></textarea>
-      <label class="f">Nutrition (optional) — one per line, like “Calories: 250”</label><textarea name="nutrition" rows="4"></textarea>
-      <label class="f">Source name</label><input name="sourceName">
-      <label class="f">Source link</label><input name="sourceUrl" type="url" value="${esc(shared.url)}">
-      <p><button class="btn primary" type="submit">Save recipe</button></p>
+      <label class="f">Summary</label><textarea name="summary" rows="2">${esc(v.summary)}</textarea>
+      <label class="f">Ingredients — one per line, like “2 cups flour”</label><textarea name="ingredients" rows="6" required>${esc((v.ingredients || []).map(ingText).join('\n'))}</textarea>
+      <label class="f">Steps — one per line</label><textarea name="steps" rows="6" required>${esc((v.steps || []).join('\n'))}</textarea>
+      <label class="f">Nutrition (optional) — one per line, like “Calories: 250”</label><textarea name="nutrition" rows="4">${esc(v.nutrition)}</textarea>
+      <label class="f">Source name</label><input name="sourceName" value="${esc(v.sourceName)}">
+      <label class="f">Source link</label><input name="sourceUrl" type="url" value="${esc(ex ? v.sourceUrl : shared.url)}">
+      <p><button class="btn primary" type="submit">${ex ? 'Save changes' : 'Save recipe'}</button>
+        ${ex ? `<a class="btn" href="#/r/${esc(ex.id)}">Cancel</a>` : ''}</p>
     </form>`;
   const f = $app.querySelector('#f'), msg = $app.querySelector('#impmsg'), impBtn = $app.querySelector('#imp');
+  const saveLabel = ex ? 'Save changes' : 'Save recipe';
   const runImport = async () => {
     const url = $app.querySelector('#iu').value.trim();
     if (!url) return;
@@ -351,6 +362,7 @@ async function add(params) {
   const prev = $app.querySelector('#prev');
   const showPrev = u => { if (safeUrl(u)) { prev.referrerPolicy = 'no-referrer'; prev.src = safeUrl(u); prev.hidden = false; } else prev.hidden = true; };
   f.elements.image.oninput = () => showPrev(f.elements.image.value.trim());
+  if (ex && ex.image) showPrev(ex.image);
   const picFile = $app.querySelector('#picfile');
   $app.querySelector('#pic').onclick = () => picFile.click();
   picFile.onchange = async () => {
@@ -405,18 +417,18 @@ async function add(params) {
   f.onsubmit = async e => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target));
-    const rec = { id: uid(), title: d.title.trim(), category: d.category, sourceName: d.sourceName.trim(), sourceUrl: d.sourceUrl.trim(),
-      servings: +d.servings || 1, summary: d.summary.trim(), image: d.image.trim(), favorite: false,
+    const rec = { id: ex ? ex.id : uid(), title: d.title.trim(), category: d.category, sourceName: d.sourceName.trim(), sourceUrl: d.sourceUrl.trim(),
+      servings: +d.servings || 1, summary: d.summary.trim(), image: d.image.trim(), favorite: ex ? !!ex.favorite : false,
       prepTime: d.prepTime.trim(), totalTime: d.totalTime.trim(), nutrition: d.nutrition.trim(),
       ingredients: d.ingredients.split('\n').map(parseIngredient).filter(Boolean),
       steps: d.steps.split('\n').map(s => s.replace(/^\s*\d{1,2}[.)]\s+/, '').trim()).filter(Boolean) };
     const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Saving…';
     try {
-      const dup = await findDup(rec.sourceUrl, rec.title);
-      if (dup && !confirm(`“${dup.r.title}” is already in your recipes. Save another copy anyway?`)) { btn.disabled = false; btn.textContent = 'Save recipe'; return; }
+      const dup = ex ? null : await findDup(rec.sourceUrl, rec.title);
+      if (dup && !confirm(`“${dup.r.title}” is already in your recipes. Save another copy anyway?`)) { btn.disabled = false; btn.textContent = saveLabel; return; }
       await Store.save(rec); location.hash = '#/r/' + rec.id; }
     catch (err) {
-      btn.disabled = false; btn.textContent = 'Save recipe';
+      btn.disabled = false; btn.textContent = saveLabel;
       if (err instanceof AuthError) return settings('That passcode didn’t work. Check it and try again.');
       toast('Couldn’t save: ' + err.message);
     }
@@ -443,6 +455,10 @@ async function route() {
   try {
     if (h.startsWith('#/settings')) return settings();
     if (h.startsWith('#/r/')) return await recipe(decodeURIComponent(h.slice(4)));
+    if (h.startsWith('#/edit/')) {
+      const ex = await Store.get(decodeURIComponent(h.slice(7)));
+      return ex ? await add(null, ex) : ($app.innerHTML = '<p>Recipe not found. <a href="#/">Back</a></p>');
+    }
     if (h.startsWith('#/add')) return await add(window.__shared);
     return await home();
   } catch (e) {
