@@ -366,6 +366,23 @@ function cleanEmailBody_(body) {
   return out.join('\n').replace(/\n{3,}/g, '\n\n').split(/\n{2,}/).filter(function (p) { return !boiler.test(p); }).join('\n\n').trim();
 }
 
+/**
+ * The Nutrition block is usually last in an email, so whatever follows it (a signature, a name, a company) would be
+ * swept in. Keep only lines that read like nutrition facts, and stop at the first line that doesn't.
+ */
+function nutLines_(arr) {
+  const word = /\b(calories?|kcal|energy|fat|saturated|trans|cholesterol|sodium|salt|carbohydrates?|carbs?|fib(?:er|re)|sugars?|protein|vitamin|calcium|iron|potassium|serving|servings|daily value|amount)\b/i;
+  const value = /^[\d.,]+\s*(g|mg|mcg|kcal|cal|oz|%)?\s*(\d+\s*%)?$/i;
+  const kept = [];
+  for (let i = 0; i < arr.length; i++) {
+    const l = arr[i].trim();
+    if (word.test(l) || value.test(l)) kept.push(l);
+    else if (!kept.length && !/\d/.test(l) && l.split(/\s+/).length <= 4) continue;   // a lead-in such as "Per serving:"
+    else break;
+  }
+  return kept;
+}
+
 /** Drops a sign-off and everything after it ("Thanks, Jo", phone, address, "Sent from my iPhone") from the end of scanned lines. */
 function trimSignature_(lines) {
   // A sign-off word, optionally followed by a name (up to two capitalised words): "Thanks," / "Best, Jo". "Best served warm." is not one.
@@ -378,6 +395,17 @@ function trimSignature_(lines) {
   const from = Math.max(0, lines.length - 10);
   for (let i = lines.length - 1; i >= from; i--) {
     if (closing.test(lines[i].trim())) { lines.length = i; break; }
+  }
+  // No sign-off word? A signature still gives itself away with an email address or phone number near the end.
+  // Cut from there, taking the short name / title / company lines just above it (never lines with digits: those are nutrition or amounts).
+  const contact = /@[\w.-]+\.\w+|\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}/;
+  const tail = Math.max(0, lines.length - 8);
+  let c = -1;
+  for (let i = tail; i < lines.length; i++) { if (contact.test(lines[i])) { c = i; break; } }
+  if (c >= 0) {
+    let s = c;
+    while (s > tail && !/\d/.test(lines[s - 1]) && !/[.!?:]$/.test(lines[s - 1].trim()) && lines[s - 1].trim().split(/\s+/).length <= 5) s--;
+    lines.length = s;
   }
   while (lines.length && junk.test(lines[lines.length - 1].trim())) lines.length--;
 }
@@ -473,7 +501,7 @@ function parseScan_(text) {
   const isDir = function (l) { return /^(directions?|instructions?|method|steps?|preparation|procedure)\s*:?$/i.test(l); };
   // Nutrition block (usually last): peel it off first so it doesn't leak into the steps.
   const nutI = lines.findIndex(function (l) { return /^nutrition(al)?( information| facts| info)?\s*:?$/i.test(l); });
-  const nutrition = nutI >= 0 ? lines.slice(nutI + 1).join('\n') : '';
+  const nutrition = nutI >= 0 ? nutLines_(lines.slice(nutI + 1)).join('\n') : '';
   if (nutI >= 0) lines.length = nutI;
   const timeOf = function (re) { const m = text.match(re); return m ? m[1].trim().slice(0, 30) : ''; };
   const cookTime = timeOf(/cook(?:ing)?\s*time\s*:?\s*([^\n]+)/i);
