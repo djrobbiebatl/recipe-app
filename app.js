@@ -45,10 +45,11 @@ const Store = {
     if (Cfg.url) { await api({ action: 'delete', id }); await this.list(true); return; }
     lsSet('recipes.local.v1', (await this.list()).filter(r => r.id !== id));
   },
-  async save(r) {
+  async save(r, quiet) {
     if (Cfg.url) {
       await api({ action: 'save', recipe: r, name: Cfg.name });
-      await this.list(true);
+      if (quiet) { const i = (this.mem || []).findIndex(x => x.id === r.id); if (i >= 0) { this.mem[i] = r; lsSet('recipes.cache', this.mem); } }
+      else await this.list(true);
       return;
     }
     const all = await this.list();
@@ -117,6 +118,14 @@ async function filePayload(file) {
   const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
   return { mime: 'image/jpeg', data: await toB64(blob) };
 }
+const allCats = list => [...CATEGORIES, ...new Set(list.map(r => r.category).filter(c => c && !CATEGORIES.includes(c)))];
+// Star toggle shared by the cards and the recipe page. Updates instantly, saves in the background, rolls back on failure.
+async function toggleFav(r, btn) {
+  r.favorite = !r.favorite; btn.textContent = r.favorite ? '★' : '☆'; btn.classList.toggle('on', r.favorite);
+  try { await Store.save(r, true); }
+  catch (e) { r.favorite = !r.favorite; btn.textContent = r.favorite ? '★' : '☆'; btn.classList.toggle('on', r.favorite); toast('Couldn’t update favorite'); }
+}
+const thumb = u => safeUrl(u) ? ` style="background-image:url('${esc(safeUrl(u))}')"` : '';
 const uid = () => 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
 function toast(msg) {
@@ -157,22 +166,38 @@ async function home() {
   let q = '', cat = '';
   $app.innerHTML = `
     ${Cfg.url ? '' : '<div class="note">⚠️ Demo mode — not connected to the Google Sheet. Recipes saved now stay on this device only. Close and reopen the app to load the latest version.</div>'}
-    <input id="q" type="search" placeholder="Search recipes or ingredients…" autocomplete="off">
+    <div class="row"><input id="q" type="search" placeholder="Search recipes or ingredients…" autocomplete="off" style="flex:1;min-width:180px">
+      <span class="seg" id="seg"><button class="chip" data-v="tiles">▦ Tiles</button><button class="chip" data-v="list">☰ List</button></span></div>
     <div class="chips" id="chips"></div>
-    <div class="grid" id="grid"></div>`;
+    <div id="grid"></div>`;
+  let view = lsGet('recipes.view') === 'list' ? 'list' : 'tiles';
+  const star = r => `<button class="star ${r.favorite ? 'on' : ''}" data-id="${esc(r.id)}" title="Favorite" aria-label="Favorite">${r.favorite ? '★' : '☆'}</button>`;
   const draw = () => {
-    $app.querySelector('#chips').innerHTML = ['All', ...CATEGORIES].map(c =>
-      `<button class="chip ${(c === 'All' ? !cat : cat === c) ? 'on' : ''}" data-c="${esc(c)}">${esc(c)}</button>`).join('');
-    const hits = all.filter(r => (!cat || r.category === cat) &&
+    $app.querySelector('#chips').innerHTML = [['', 'All'], ['__fav', '★ Favorites'], ...allCats(all).map(c => [c, c])].map(([v, label]) =>
+      `<button class="chip ${cat === v ? 'on' : ''}" data-c="${esc(v)}">${esc(label)}</button>`).join('');
+    $app.querySelectorAll('#seg .chip').forEach(b => b.classList.toggle('on', b.dataset.v === view));
+    const hits = all.filter(r => (cat === '__fav' ? r.favorite : (!cat || r.category === cat)) &&
       (!q || (r.title + ' ' + r.summary + ' ' + r.ingredients.map(i => i.item).join(' ')).toLowerCase().includes(q)));
-    $app.querySelector('#grid').innerHTML = hits.length ? hits.map(r => `
+    const g = $app.querySelector('#grid');
+    g.className = view === 'list' ? 'list' : 'grid';
+    g.innerHTML = !hits.length ? '<p class="muted">No recipes found.</p>' : hits.map(r => view === 'list' ? `
+      <a class="lrow" href="#/r/${esc(r.id)}">
+        <div class="lthumb"${thumb(r.image)}>${r.image ? '' : '🍽️'}</div>
+        <div class="lbody"><b>${esc(r.title)}</b><div class="muted">${esc(r.category)} · serves ${esc(r.servings)}${r.totalTime ? ' · ' + esc(r.totalTime) : ''}</div></div>${star(r)}
+      </a>` : `
       <a class="card" href="#/r/${esc(r.id)}">
-        <div class="img" style="${r.image ? `background-image:url('${esc(safeUrl(r.image))}')` : ''}">${r.image ? '' : '🍽️'}</div>
+        <div class="img"${thumb(r.image)}>${r.image ? '' : '🍽️'}${star(r)}</div>
         <div class="body"><h3>${esc(r.title)}</h3><div class="muted">${esc(r.category)} · serves ${esc(r.servings)}</div></div>
-      </a>`).join('') : '<p class="muted">No recipes found.</p>';
+      </a>`).join('');
   };
   $app.querySelector('#q').oninput = e => { q = e.target.value.trim().toLowerCase(); draw(); };
-  $app.querySelector('#chips').onclick = e => { const c = e.target.dataset.c; if (c) { cat = c === 'All' ? '' : c; draw(); } };
+  $app.querySelector('#chips').onclick = e => { const b = e.target.closest('[data-c]'); if (b) { cat = b.dataset.c; draw(); } };
+  $app.querySelector('#seg').onclick = e => { const b = e.target.closest('[data-v]'); if (b) { view = b.dataset.v; lsSet('recipes.view', view); draw(); } };
+  $app.querySelector('#grid').onclick = e => {
+    const s = e.target.closest('.star'); if (!s) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = all.find(x => x.id === s.dataset.id); if (r) toggleFav(r, s).then(() => { if (cat === '__fav') draw(); });
+  };
   draw();
 }
 
@@ -184,12 +209,15 @@ async function recipe(id) {
   const src = safeUrl(r.sourceUrl);
   $app.innerHTML = `
     <a href="#/" class="noprint">← All recipes</a>
-    <h1>${esc(r.title)}</h1>
+    <h1 class="titlerow"><span>${esc(r.title)}</span><button class="star big noprint ${r.favorite ? 'on' : ''}" id="fav" title="Favorite" aria-label="Favorite">${r.favorite ? '★' : '☆'}</button></h1>
     <div class="muted">${esc(r.category)} · Source: ${src ? `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(r.sourceName || src)}</a>` : esc(r.sourceName)}</div>
-    ${r.image ? `<img class="hero" src="${esc(safeUrl(r.image))}" alt="">` : ''}
+    ${r.image ? `<img class="hero" src="${esc(safeUrl(r.image))}" alt="" referrerpolicy="no-referrer">` : ''}
     <p>${esc(r.summary)}</p>
+    <div class="row facts">
+      ${r.prepTime ? `<span><b>Prep</b> ${esc(r.prepTime)}</span>` : ''}${r.totalTime ? `<span><b>Total</b> ${esc(r.totalTime)}</span>` : ''}
+      <span class="servings"><b>Servings</b> <button class="btn noprint" id="minus">−</button><input id="sv" type="number" min="1" value="${servings}"><button class="btn noprint" id="plus">+</button></span>
+    </div>
     <div class="row tools">
-      <span class="servings">Servings <button class="btn" id="minus">−</button><input id="sv" type="number" min="1" value="${servings}"><button class="btn" id="plus">+</button></span>
       <button class="btn" id="print">🖨️ Print</button>
       <button class="btn" id="del">🗑️ Delete</button>
       ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" checked style="width:auto"> with picture</label>' : ''}
@@ -202,7 +230,11 @@ async function recipe(id) {
         <div class="row tools"><button class="btn primary" id="shop">Add to shopping list</button></div>
       </section>
       <section><h2>Instructions</h2><ol class="steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol></section>
-    </div>`;
+    </div>
+    ${r.nutrition ? `<h2>Nutrition</h2><table class="nut">${String(r.nutrition).split('\n').filter(Boolean).map(l => {
+      const i = l.indexOf(':'); return i > 0 ? `<tr><td>${esc(l.slice(0, i))}</td><td>${esc(l.slice(i + 1).trim())}</td></tr>` : `<tr><td colspan="2">${esc(l)}</td></tr>`;
+    }).join('')}</table>` : ''}`;
+  $app.querySelector('#fav').onclick = e => toggleFav(r, e.currentTarget);
   const drawIng = () => {
     const k = servings / (r.servings || 1);
     $app.querySelector('#ing').innerHTML = r.ingredients.map((i, n) =>
@@ -255,14 +287,24 @@ async function add(params) {
     <details id="raw" class="note" hidden><summary>Show the scanned text</summary><pre id="rawtxt" style="white-space:pre-wrap"></pre></details>
     <form id="f">
       <label class="f">Title</label><input name="title" required value="${esc(shared.title)}">
-      <label class="f">Category</label><select name="category">${CATEGORIES.map(c => `<option>${esc(c)}</option>`).join('')}</select>
-      <label class="f">Source name</label><input name="sourceName">
-      <label class="f">Source link</label><input name="sourceUrl" type="url" value="${esc(shared.url)}">
-      <label class="f">Servings</label><input name="servings" type="number" min="1" value="4">
-      <label class="f">Picture link (optional)</label><input name="image" type="url">
+      <label class="f">Category</label>
+      <div class="row" style="margin-top:0"><select name="category" style="flex:1">${allCats(await Store.list()).map(c => `<option>${esc(c)}</option>`).join('')}</select>
+        <button class="btn" id="newcat" type="button">+ New category</button></div>
+      <div class="cols3">
+        <div><label class="f">Servings</label><input name="servings" type="number" min="1" value="4"></div>
+        <div><label class="f">Prep time</label><input name="prepTime" placeholder="15 min"></div>
+        <div><label class="f">Total time</label><input name="totalTime" placeholder="1 hr"></div>
+      </div>
+      <label class="f">Picture</label>
+      <div class="row" style="margin-top:0"><input name="image" type="url" placeholder="Picture link, or upload one →" style="flex:1;min-width:180px">
+        <button class="btn" id="pic" type="button">⬆️ Upload photo</button><input id="picfile" type="file" accept="image/*" hidden></div>
+      <img id="prev" class="hero" alt="" hidden style="max-height:180px">
       <label class="f">Summary</label><textarea name="summary" rows="2"></textarea>
       <label class="f">Ingredients — one per line, like “2 cups flour”</label><textarea name="ingredients" rows="6" required></textarea>
       <label class="f">Steps — one per line</label><textarea name="steps" rows="6" required></textarea>
+      <label class="f">Nutrition (optional) — one per line, like “Calories: 250”</label><textarea name="nutrition" rows="4"></textarea>
+      <label class="f">Source name</label><input name="sourceName">
+      <label class="f">Source link</label><input name="sourceUrl" type="url" value="${esc(shared.url)}">
       <p><button class="btn primary" type="submit">Save recipe</button></p>
     </form>`;
   const f = $app.querySelector('#f'), msg = $app.querySelector('#impmsg'), impBtn = $app.querySelector('#imp');
@@ -283,7 +325,9 @@ async function add(params) {
       const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
       set('title', r.title); set('sourceName', r.sourceName); set('sourceUrl', r.sourceUrl || url);
       set('servings', r.servings); set('image', r.image); set('summary', r.summary);
-      if (CATEGORIES.includes(r.category)) set('category', r.category);
+      set('prepTime', r.prepTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
+      if (r.image) showPrev(r.image);
+      if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
       set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
       msg.textContent = found ? 'Imported — check it over, then save.'
         : 'That page has no recipe data I can read. I filled in what I could — add the rest by hand.';
@@ -294,6 +338,36 @@ async function add(params) {
   };
   impBtn.onclick = runImport;
   if (shared.url) runImport();
+
+  // ----- new category, recipe picture -----
+  $app.querySelector('#newcat').onclick = () => {
+    const n = (prompt('New category name:') || '').trim().slice(0, 30);
+    if (!n) return;
+    const sel = f.elements.category;
+    let o = [...sel.options].find(x => x.value.toLowerCase() === n.toLowerCase());
+    if (!o) { o = new Option(n, n); sel.add(o); }
+    sel.value = o.value;
+  };
+  const prev = $app.querySelector('#prev');
+  const showPrev = u => { if (safeUrl(u)) { prev.referrerPolicy = 'no-referrer'; prev.src = safeUrl(u); prev.hidden = false; } else prev.hidden = true; };
+  f.elements.image.oninput = () => showPrev(f.elements.image.value.trim());
+  const picFile = $app.querySelector('#picfile');
+  $app.querySelector('#pic').onclick = () => picFile.click();
+  picFile.onchange = async () => {
+    const file = picFile.files[0]; picFile.value = '';
+    if (!file) return;
+    if (!Cfg.url) { msg.textContent = 'Connect the Google Sheet first — photo upload needs it.'; return; }
+    msg.textContent = 'Uploading photo…';
+    try {
+      const p = await filePayload(file);
+      if (p.mime === 'application/pdf') throw new Error('Please choose a photo, not a PDF');
+      const d = await api({ action: 'upload', mime: p.mime, data: p.data });
+      f.elements.image.value = d.imageUrl; showPrev(d.imageUrl); msg.textContent = 'Photo added.';
+    } catch (e) {
+      if (e instanceof AuthError) return settings('Enter the shared passcode first.');
+      msg.textContent = 'Couldn’t upload: ' + e.message;
+    }
+  };
 
   // ----- photo / PDF scan (Google Drive OCR, done in the Apps Script) -----
   const fileEl = $app.querySelector('#file');
@@ -311,8 +385,11 @@ async function add(params) {
       }
       const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
       set('title', r.title); set('servings', r.servings); set('summary', r.summary);
-      if (CATEGORIES.includes(r.category)) set('category', r.category);
+      set('prepTime', r.prepTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
+      if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
       set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
+      // An uploaded/scanned source has no web page: link the saved original and mark it as an import.
+      if (d.fileUrl) { set('sourceUrl', d.fileUrl); set('sourceName', 'Import'); }
       $app.querySelector('#rawtxt').textContent = d.text || ''; $app.querySelector('#raw').hidden = !d.text;
       msg.textContent = 'Scanned — scans are rarely perfect, so check every line before saving.';
     } catch (e) {
@@ -329,7 +406,8 @@ async function add(params) {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target));
     const rec = { id: uid(), title: d.title.trim(), category: d.category, sourceName: d.sourceName.trim(), sourceUrl: d.sourceUrl.trim(),
-      servings: +d.servings || 1, summary: d.summary.trim(), image: d.image.trim(),
+      servings: +d.servings || 1, summary: d.summary.trim(), image: d.image.trim(), favorite: false,
+      prepTime: d.prepTime.trim(), totalTime: d.totalTime.trim(), nutrition: d.nutrition.trim(),
       ingredients: d.ingredients.split('\n').map(parseIngredient).filter(Boolean),
       steps: d.steps.split('\n').map(s => s.replace(/^\s*\d{1,2}[.)]\s+/, '').trim()).filter(Boolean) };
     const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Saving…';

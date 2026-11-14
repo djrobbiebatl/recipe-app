@@ -6,7 +6,7 @@
  */
 const SHEET_NAME = 'Recipes';
 const COLS = ['id', 'title', 'category', 'sourceName', 'sourceUrl', 'servings', 'summary',
-              'image', 'ingredients', 'steps', 'addedBy', 'added'];
+              'image', 'ingredients', 'steps', 'addedBy', 'added', 'favorite', 'prepTime', 'totalTime', 'nutrition'];
 
 function doGet() { return out_({ ok: true, msg: 'Recipe API is running' }); }
 
@@ -21,6 +21,7 @@ function doPost(e) {
   if (req.action === 'import') return import_(req.url);
   if (req.action === 'delete') return delete_(req.id);
   if (req.action === 'scan') return scan_(req.data, req.mime);
+  if (req.action === 'upload') return upload_(req.data, req.mime);
   return out_({ ok: false, error: 'unknown action' });
 }
 
@@ -69,6 +70,24 @@ function authorize() {
   Logger.log('Authorized. Now redeploy: Deploy > Manage deployments > edit > New version.');
 }
 
+// ---------- kept files: originals of scans and recipe photos live in one Drive folder ----------
+function storeFile_(b64, mime, name) {
+  const dirs = DriveApp.getFoldersByName('Recipe App Files');
+  const folder = dirs.hasNext() ? dirs.next() : DriveApp.createFolder('Recipe App Files');
+  const f = folder.createFile(Utilities.newBlob(Utilities.base64Decode(b64), mime, name));
+  // "Anyone with the link can view" so the app and both of you can open it without Drive sign-in.
+  f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return { viewUrl: f.getUrl(), imageUrl: 'https://drive.google.com/thumbnail?id=' + f.getId() + '&sz=w1200' };
+}
+
+function upload_(b64, mime) {
+  if (!b64 || !/^image\/(jpeg|png|webp|gif)$/.test(String(mime))) return out_({ ok: false, error: 'Please choose a JPEG or PNG photo' });
+  try {
+    const s = storeFile_(b64, mime, 'recipe-photo-' + Date.now());
+    return out_({ ok: true, imageUrl: s.imageUrl, viewUrl: s.viewUrl });
+  } catch (e) { return out_({ ok: false, error: 'Upload failed (' + String(e && e.message || e).slice(0, 120) + ')' }); }
+}
+
 // ---------- photo / PDF scan: Google Drive turns the file into a Doc (with OCR), we read the text ----------
 function scan_(b64, mime) {
   if (!b64 || !/^(image\/(jpeg|png|webp|gif)|application\/pdf)$/.test(String(mime))) return out_({ ok: false, error: 'Please use a photo (JPEG/PNG) or a PDF' });
@@ -79,7 +98,9 @@ function scan_(b64, mime) {
     id = f.id;
     const text = DocumentApp.openById(id).getBody().getText();
     if (!text || text.replace(/\s/g, '').length < 20) return out_({ ok: false, error: 'I couldn\'t find any readable text in that file' });
-    return out_({ ok: true, text: text.slice(0, 20000), recipe: parseScan_(text) });
+    let fileUrl = '';
+    try { fileUrl = storeFile_(b64, mime, 'recipe-scan-' + Date.now()).viewUrl; } catch (e3) { /* keep going without a link */ }
+    return out_({ ok: true, text: text.slice(0, 20000), fileUrl: fileUrl, recipe: parseScan_(text) });
   } catch (e) {
     const msg = String(e && e.message || e);
     if (/Drive is not defined/i.test(msg)) return out_({ ok: false, error: 'The Drive API service isn\'t added to the script yet (Services > + > Drive API)' });
@@ -96,6 +117,12 @@ function parseScan_(text) {
   const lines = raw.filter(String);
   const isIng = function (l) { return /^(ingredients?)\s*:?$/i.test(l); };
   const isDir = function (l) { return /^(directions?|instructions?|method|steps?|preparation|procedure)\s*:?$/i.test(l); };
+  // Nutrition block (usually last): peel it off first so it doesn't leak into the steps.
+  const nutI = lines.findIndex(function (l) { return /^nutrition(al)?( information| facts| info)?\s*:?$/i.test(l); });
+  const nutrition = nutI >= 0 ? lines.slice(nutI + 1).join('\n') : '';
+  if (nutI >= 0) lines.length = nutI;
+  const timeOf = function (re) { const m = text.match(re); return m ? m[1].trim().slice(0, 30) : ''; };
+  const prepTime = timeOf(/prep(?:aration)?\s*time\s*:?\s*([^\n]+)/i), totalTime = timeOf(/total\s*time\s*:?\s*([^\n]+)/i);
   const ingI = lines.findIndex(isIng), dirI = lines.findIndex(isDir);
   const startsQty = function (l) { return /^[•\-*·]?\s*(\d|[¼½¾⅓⅔⅛])/.test(l); };
   const bullet = function (l) { return l.replace(/^[•\-*·]\s*/, ''); };
@@ -141,7 +168,7 @@ function parseScan_(text) {
     if (numbered || prevDone) steps.push(body); else steps[steps.length - 1] += ' ' + body;
   });
   return { title: title.slice(0, 120), summary: summary, servings: servings, category: guessCategory_(title + ' ' + summary),
-           ingredients: ings, steps: steps };
+           prepTime: prepTime, totalTime: totalTime, nutrition: nutrition, ingredients: ings, steps: steps };
 }
 
 function extract_(html, url) {
@@ -170,9 +197,29 @@ function extract_(html, url) {
     title: clean_(node.name), summary: clean_(node.description), image: String(img || og('og:image') || ''),
     sourceName: site, sourceUrl: url, author: clean_(author || ''),
     servings: yieldNum ? Number(yieldNum) : 4, category: guessCategory_(cat),
+    prepTime: dur_(node.prepTime), totalTime: dur_(node.totalTime), nutrition: nut_(node.nutrition),
     ingredients: [].concat(node.recipeIngredient || node.ingredients || []).map(clean_).filter(String),
     steps: steps_(node.recipeInstructions)
   } };
+}
+
+/** ISO-8601 duration ("PT1H15M") -> "1 hr 15 min". Anything else is passed through. */
+function dur_(v) {
+  if (!v) return '';
+  const m = String(v).match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/i);
+  if (!m) return clean_(v);
+  const mins = (Number(m[1] || 0) * 24 + Number(m[2] || 0)) * 60 + Number(m[3] || 0);
+  if (!mins) return '';
+  return mins >= 60 ? Math.floor(mins / 60) + ' hr' + (mins % 60 ? ' ' + (mins % 60) + ' min' : '') : mins + ' min';
+}
+
+/** schema.org NutritionInformation -> "Label: value" lines. */
+function nut_(n) {
+  if (!n || typeof n !== 'object') return '';
+  const labels = { servingSize: 'Serving size', calories: 'Calories', fatContent: 'Fat', saturatedFatContent: 'Saturated fat',
+    transFatContent: 'Trans fat', cholesterolContent: 'Cholesterol', sodiumContent: 'Sodium', carbohydrateContent: 'Carbohydrates',
+    fiberContent: 'Fiber', sugarContent: 'Sugar', proteinContent: 'Protein' };
+  return Object.keys(labels).filter(function (k) { return n[k]; }).map(function (k) { return labels[k] + ': ' + clean_(n[k]); }).join('\n');
 }
 
 function findRecipe_(x) {
@@ -230,6 +277,9 @@ function sheet_() {
     sh.getRange(1, 1, 1, COLS.length).setValues([COLS]).setFontWeight('bold');
     sh.setFrozenRows(1);
   }
+  // Keep the header row in step with COLS (adds new columns to an existing sheet).
+  const hdr = sh.getRange(1, 1, 1, COLS.length);
+  if (hdr.getValues()[0].join('|') !== COLS.join('|')) hdr.setNumberFormat('@').setValues([COLS]).setFontWeight('bold');
   // Plain-text format so nothing a recipe contains is ever treated as a formula.
   sh.getRange(1, 1, Math.max(sh.getMaxRows(), 2), COLS.length).setNumberFormat('@');
   return sh;
@@ -245,7 +295,8 @@ function list_() {
     return {
       id: String(o.id), title: o.title, category: o.category, sourceName: o.sourceName, sourceUrl: o.sourceUrl,
       servings: Number(o.servings) || 1, summary: o.summary, image: o.image,
-      ingredients: parse_(o.ingredients), steps: parse_(o.steps), addedBy: o.addedBy, added: o.added
+      ingredients: parse_(o.ingredients), steps: parse_(o.steps), addedBy: o.addedBy, added: o.added,
+      favorite: String(o.favorite) === 'true', prepTime: o.prepTime, totalTime: o.totalTime, nutrition: o.nutrition
     };
   }).filter(function (r) { return r.id && r.title; }).reverse();
 }
@@ -263,7 +314,8 @@ function save_(r, name) {
       lim(r.id, 40), lim(r.title, 200), lim(r.category, 40), lim(r.sourceName, 200), lim(r.sourceUrl, 1000),
       String(Number(r.servings) || 1), lim(r.summary, 2000), lim(r.image, 2000),
       lim(JSON.stringify(r.ingredients || []), 20000), lim(JSON.stringify(r.steps || []), 20000),
-      lim(name, 60), new Date().toISOString()
+      lim(name, 60), new Date().toISOString(),
+      String(r.favorite === true), lim(r.prepTime, 40), lim(r.totalTime, 40), lim(r.nutrition, 2000)
     ];
     const n = sh.getLastRow() - 1;
     let rowNum = 0;
