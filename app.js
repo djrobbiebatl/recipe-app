@@ -197,10 +197,12 @@ async function recipe(id) {
 
 async function add(params) {
   const shared = params || {};
+  window.__shared = null; // one-shot, so coming back to Add later doesn't re-import
   $app.innerHTML = `
     <h1>Add a recipe</h1>
-    <div class="note">Importing from a link, photo or PDF arrives in the next steps. For now, enter one by hand.
-      ${shared.url ? `<br><b>Shared link:</b> ${esc(shared.url)}` : ''}</div>
+    <div class="row"><input id="iu" type="url" placeholder="Paste a recipe link…" value="${esc(shared.url)}" style="flex:1;min-width:200px">
+      <button class="btn primary" id="imp" type="button">Import</button></div>
+    <p id="impmsg" class="muted"></p>
     <form id="f">
       <label class="f">Title</label><input name="title" required value="${esc(shared.title)}">
       <label class="f">Category</label><select name="category">${CATEGORIES.map(c => `<option>${esc(c)}</option>`).join('')}</select>
@@ -213,7 +215,30 @@ async function add(params) {
       <label class="f">Steps — one per line</label><textarea name="steps" rows="6" required></textarea>
       <p><button class="btn primary" type="submit">Save recipe</button></p>
     </form>`;
-  $app.querySelector('#f').onsubmit = async e => {
+  const f = $app.querySelector('#f'), msg = $app.querySelector('#impmsg'), impBtn = $app.querySelector('#imp');
+  const runImport = async () => {
+    const url = $app.querySelector('#iu').value.trim();
+    if (!url) return;
+    if (!Cfg.url) { msg.textContent = 'Connect the Google Sheet first — import needs it.'; return; }
+    msg.textContent = 'Reading the recipe…'; impBtn.disabled = true;
+    try {
+      const r = (await api({ action: 'import', url })).recipe;
+      const found = r.ingredients && r.ingredients.length;
+      const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
+      set('title', r.title); set('sourceName', r.sourceName); set('sourceUrl', r.sourceUrl || url);
+      set('servings', r.servings); set('image', r.image); set('summary', r.summary);
+      if (CATEGORIES.includes(r.category)) set('category', r.category);
+      set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
+      msg.textContent = found ? 'Imported — check it over, then save.'
+        : 'That page has no recipe data I can read. I filled in what I could — add the rest by hand.';
+    } catch (e) {
+      if (e instanceof AuthError) return settings('Enter the shared passcode first.');
+      msg.textContent = 'Couldn’t import: ' + e.message;
+    } finally { impBtn.disabled = false; }
+  };
+  impBtn.onclick = runImport;
+  if (shared.url) runImport();
+  f.onsubmit = async e => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target));
     const rec = { id: uid(), title: d.title.trim(), category: d.category, sourceName: d.sourceName.trim(), sourceUrl: d.sourceUrl.trim(),
