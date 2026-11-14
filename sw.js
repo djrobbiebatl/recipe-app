@@ -1,5 +1,5 @@
 // Network-first for the app shell so updates land quickly; cache fallback for offline.
-const CACHE = 'recipes-v1';
+const CACHE = 'recipes-v2';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => {
@@ -14,7 +14,8 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(req).then(res => {
+    // 'no-cache' = always check with the server (GitHub Pages tells browsers to reuse files for 10 minutes).
+    fetch(new Request(req, { cache: 'no-cache' })).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(req, copy));
       return res;
