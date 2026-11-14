@@ -198,7 +198,7 @@ async function home() {
     g.innerHTML = !hits.length ? `<p class="muted">${loading ? 'Loading recipes… the first load can take up to 20 seconds.' : 'No recipes found.'}</p>` : hits.map(r => view === 'list' ? `
       <a class="lrow" href="#/r/${esc(r.id)}">
         <div class="lthumb"${thumb(r.image)}>${r.image ? '' : '🍽️'}</div>
-        <div class="lbody"><b>${esc(r.title)}</b><div class="muted">${esc(r.category)} · serves ${esc(r.servings)}</div>${r.prepTime || r.totalTime ? `<div class="muted">${r.prepTime ? 'Prep ' + esc(r.prepTime) : ''}${r.prepTime && r.totalTime ? ' · ' : ''}${r.totalTime ? 'Total ' + esc(r.totalTime) : ''}</div>` : ''}</div>${star(r)}
+        <div class="lbody"><b>${esc(r.title)}</b><div class="muted">${esc(r.category)} · serves ${esc(r.servings)}</div>${timesLine(r) ? `<div class="muted">${esc(timesLine(r))}</div>` : ''}</div>${star(r)}
       </a>` : `
       <a class="card" href="#/r/${esc(r.id)}">
         <div class="img"${thumb(r.image)}>${r.image ? '' : '🍽️'}${star(r)}</div>
@@ -238,7 +238,7 @@ async function recipe(id) {
     ${r.image ? `<img class="hero" src="${esc(safeUrl(r.image))}" alt="" referrerpolicy="no-referrer">` : ''}
     <p>${esc(r.summary)}</p>
     <div class="row facts">
-      ${r.prepTime ? `<span><b>Prep</b> ${esc(r.prepTime)}</span>` : ''}${r.totalTime ? `<span><b>Total</b> ${esc(r.totalTime)}</span>` : ''}
+      ${r.prepTime ? `<span><b>Prep</b> ${esc(r.prepTime)}</span>` : ''}${r.cookTime ? `<span><b>Cook</b> ${esc(r.cookTime)}</span>` : ''}${r.totalTime ? `<span><b>Total</b> ${esc(r.totalTime)}</span>` : ''}
       <span class="servings"><b>Servings</b> <button class="btn noprint" id="minus">−</button><input id="sv" type="number" min="1" value="${servings}"><button class="btn noprint" id="plus">+</button></span>
     </div>
     <div class="row tools">
@@ -326,6 +326,7 @@ function marinateLine(steps) {
   return found.slice(0, 2).join(' ');
 }
 
+const timesLine = r => [r.prepTime && 'Prep ' + r.prepTime, r.cookTime && 'Cook ' + r.cookTime, r.totalTime && 'Total ' + r.totalTime].filter(Boolean).join(' · ');
 const ingText = i => ((i.amt == null ? '' : fmtAmt(i.amt)) + ' ' + (i.unit || '') + ' ' + i.item).replace(/\s+/g, ' ').trim();
 
 // One screen for both adding (ex = undefined) and editing (ex = the saved recipe).
@@ -420,9 +421,10 @@ async function add(params, ex) {
       <label class="f">Category</label>
       <div class="row" style="margin-top:0"><select name="category" style="flex:1">${cats.map(c => `<option${v.category === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
         <button class="btn" id="newcat" type="button">+ New category</button></div>
-      <div class="cols3">
+      <div class="cols4">
         <div><label class="f">Servings</label><input name="servings" type="number" min="1" value="${esc(v.servings || 4)}"></div>
         <div><label class="f">Prep time</label><input name="prepTime" placeholder="15 min" value="${esc(v.prepTime)}"></div>
+        <div><label class="f">Cook time</label><input name="cookTime" placeholder="30 min" value="${esc(v.cookTime)}"></div>
         <div><label class="f">Total time</label><input name="totalTime" placeholder="1 hr" value="${esc(v.totalTime)}"></div>
       </div>
       <label class="f">Picture</label>
@@ -468,7 +470,7 @@ async function add(params, ex) {
       const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
       set('title', r.title); set('sourceName', r.sourceName); set('sourceUrl', r.sourceUrl || url);
       set('servings', r.servings); set('image', r.image); set('summary', r.summary);
-      set('prepTime', r.prepTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
+      set('prepTime', r.prepTime); set('cookTime', r.cookTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
       if (r.image) showPrev(r.image);
       if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
       set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
@@ -500,7 +502,7 @@ async function add(params, ex) {
       if (!(r.ingredients && r.ingredients.length)) { msg.textContent = 'That page has no recipe data I can read, so nothing was changed.'; return; }
       const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
       set('title', r.title); set('sourceName', r.sourceName); set('servings', r.servings); set('image', r.image); set('summary', r.summary);
-      set('prepTime', r.prepTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
+      set('prepTime', r.prepTime); set('cookTime', r.cookTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
       if (r.image) showPrev(r.image);
       if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
       set('ingredients', r.ingredients.join('\n')); set('steps', (r.steps || []).join('\n'));
@@ -554,7 +556,7 @@ async function add(params, ex) {
     }
     const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
     set('title', r.title); set('servings', r.servings); set('summary', r.summary);
-    set('prepTime', r.prepTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
+    set('prepTime', r.prepTime); set('cookTime', r.cookTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
     if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
     set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
     // A file or shared text has no web page: mark it as an import, and link the saved original if there is one.
@@ -624,7 +626,7 @@ async function add(params, ex) {
     const d = Object.fromEntries(new FormData(e.target));
     const rec = { id: ex ? ex.id : uid(), title: d.title.trim(), category: d.category, sourceName: d.sourceName.trim(), sourceUrl: d.sourceUrl.trim(),
       servings: +d.servings || 1, summary: d.summary.trim(), image: d.image.trim(), favorite: ex ? !!ex.favorite : false,
-      prepTime: d.prepTime.trim(), totalTime: d.totalTime.trim(), nutrition: d.nutrition.trim(), notes: d.notes.trim(),
+      prepTime: d.prepTime.trim(), cookTime: d.cookTime.trim(), totalTime: d.totalTime.trim(), nutrition: d.nutrition.trim(), notes: d.notes.trim(),
       ingredients: d.ingredients.split('\n').map(parseIngredient).filter(Boolean),
       steps: d.steps.split('\n').map(s => s.replace(/^\s*\d{1,2}[.)]\s+/, '').trim()).filter(Boolean) };
     // Two Save buttons (top and bottom) — keep them in step.

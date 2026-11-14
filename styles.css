@@ -57,6 +57,8 @@ label.f{display:block;margin:12px 0 4px;font-weight:600}
 .lbody{flex:1;min-width:0}
 .lbody b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cols3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.cols4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media (max-width:560px){.cols4{grid-template-columns:repeat(2,1fr)}}
 .facts{gap:22px}
 p.notes{white-space:pre-wrap}
 p.preheat{font-weight:700;font-size:1.2rem;margin:10px 0}

@@ -6,7 +6,7 @@
  */
 const SHEET_NAME = 'Recipes';
 const COLS = ['id', 'title', 'category', 'sourceName', 'sourceUrl', 'servings', 'summary',
-              'image', 'ingredients', 'steps', 'addedBy', 'added', 'favorite', 'prepTime', 'totalTime', 'nutrition', 'notes'];
+              'image', 'ingredients', 'steps', 'addedBy', 'added', 'favorite', 'prepTime', 'totalTime', 'nutrition', 'notes', 'cookTime'];
 
 function doGet() { return out_({ ok: true, msg: 'Recipe API is running' }); }
 
@@ -452,6 +452,7 @@ function parseScan_(text) {
   const nutrition = nutI >= 0 ? lines.slice(nutI + 1).join('\n') : '';
   if (nutI >= 0) lines.length = nutI;
   const timeOf = function (re) { const m = text.match(re); return m ? m[1].trim().slice(0, 30) : ''; };
+  const cookTime = timeOf(/cook(?:ing)?\s*time\s*:?\s*([^\n]+)/i);
   const prepTime = timeOf(/prep(?:aration)?\s*time\s*:?\s*([^\n]+)/i), totalTime = timeOf(/total\s*time\s*:?\s*([^\n]+)/i);
   const ingI = lines.findIndex(isIng), dirI = lines.findIndex(isDir);
   const startsQty = function (l) { return /^[•\-*·]?\s*(\d|[¼½¾⅓⅔⅛])/.test(l); };
@@ -498,7 +499,7 @@ function parseScan_(text) {
     if (numbered || prevDone) steps.push(body); else steps[steps.length - 1] += ' ' + body;
   });
   return { title: title.slice(0, 120), summary: summary, servings: servings, category: guessCategory_(title + ' ' + summary),
-           prepTime: prepTime, totalTime: totalTime, nutrition: nutrition, ingredients: ings, steps: steps };
+           prepTime: prepTime, cookTime: cookTime, totalTime: totalTime, nutrition: nutrition, ingredients: ings, steps: steps };
 }
 
 function extract_(html, url) {
@@ -527,7 +528,7 @@ function extract_(html, url) {
     title: clean_(node.name), summary: clean_(node.description), image: String(img || og('og:image') || ''),
     sourceName: site, sourceUrl: url, author: clean_(author || ''),
     servings: yieldNum ? Number(yieldNum) : 4, category: guessCategory_(cat),
-    prepTime: dur_(node.prepTime), totalTime: dur_(node.totalTime), nutrition: nut_(node.nutrition),
+    prepTime: dur_(node.prepTime), cookTime: dur_(node.cookTime), totalTime: dur_(node.totalTime), nutrition: nut_(node.nutrition),
     ingredients: [].concat(node.recipeIngredient || node.ingredients || []).map(clean_).filter(String),
     steps: steps_(node.recipeInstructions)
   } };
@@ -626,7 +627,7 @@ function list_() {
       id: String(o.id), title: o.title, category: o.category, sourceName: o.sourceName, sourceUrl: o.sourceUrl,
       servings: Number(o.servings) || 1, summary: o.summary, image: o.image,
       ingredients: parse_(o.ingredients), steps: parse_(o.steps), addedBy: o.addedBy, added: o.added,
-      favorite: String(o.favorite) === 'true', prepTime: o.prepTime, totalTime: o.totalTime, nutrition: o.nutrition, notes: o.notes
+      favorite: String(o.favorite) === 'true', prepTime: o.prepTime, totalTime: o.totalTime, nutrition: o.nutrition, notes: o.notes, cookTime: o.cookTime
     };
   }).filter(function (r) { return r.id && r.title; }).reverse();
 }
@@ -645,7 +646,7 @@ function save_(r, name) {
       String(Number(r.servings) || 1), lim(r.summary, 2000), lim(r.image, 2000),
       lim(JSON.stringify(r.ingredients || []), 20000), lim(JSON.stringify(r.steps || []), 20000),
       lim(name, 60), new Date().toISOString(),
-      String(r.favorite === true), lim(r.prepTime, 40), lim(r.totalTime, 40), lim(r.nutrition, 2000), lim(r.notes, 4000)
+      String(r.favorite === true), lim(r.prepTime, 40), lim(r.totalTime, 40), lim(r.nutrition, 2000), lim(r.notes, 4000), lim(r.cookTime, 40)
     ];
     const n = sh.getLastRow() - 1;
     let rowNum = 0;
