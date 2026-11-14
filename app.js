@@ -17,9 +17,16 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 async function api(body) {
   if (!Cfg.key) throw new AuthError('no passcode');
   // text/plain keeps this a "simple" request, so the browser skips the CORS preflight Apps Script can't answer.
-  const res = await fetch(Cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ key: Cfg.key, ...body }) });
-  const data = await res.json();
+  const quick = ['list', 'save', 'delete'].includes(body.action);
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), quick ? 40000 : 120000);
+  let data;
+  try {
+    const res = await fetch(Cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, signal: ctl.signal,
+      body: JSON.stringify({ key: Cfg.key, ...body }) });
+    data = await res.json();
+  } catch (e) {
+    throw new Error(e.name === 'AbortError' ? 'The server took too long to answer' : 'Could not reach the server (' + e.message + ')');
+  } finally { clearTimeout(timer); }
   if (!data.ok) { if (data.error === 'auth') throw new AuthError('wrong passcode'); throw new Error(data.error || 'server error'); }
   return data;
 }
@@ -162,7 +169,9 @@ function settings(msg) {
 }
 
 async function home() {
-  const all = await Store.list(true);
+  // Show saved recipes instantly, then refresh from the sheet in the background.
+  let all = Cfg.url ? (Store.mem || lsGet('recipes.cache') || null) : await Store.list();
+  let loading = !all; if (!all) all = [];
   let q = '', cat = '';
   $app.innerHTML = `
     ${Cfg.url ? '' : '<div class="note">⚠️ Demo mode — not connected to the Google Sheet. Recipes saved now stay on this device only. Close and reopen the app to load the latest version.</div>'}
@@ -180,7 +189,7 @@ async function home() {
       (!q || (r.title + ' ' + r.summary + ' ' + r.ingredients.map(i => i.item).join(' ')).toLowerCase().includes(q)));
     const g = $app.querySelector('#grid');
     g.className = view === 'list' ? 'list' : 'grid';
-    g.innerHTML = !hits.length ? '<p class="muted">No recipes found.</p>' : hits.map(r => view === 'list' ? `
+    g.innerHTML = !hits.length ? `<p class="muted">${loading ? 'Loading recipes… the first load can take up to 20 seconds.' : 'No recipes found.'}</p>` : hits.map(r => view === 'list' ? `
       <a class="lrow" href="#/r/${esc(r.id)}">
         <div class="lthumb"${thumb(r.image)}>${r.image ? '' : '🍽️'}</div>
         <div class="lbody"><b>${esc(r.title)}</b><div class="muted">${esc(r.category)} · serves ${esc(r.servings)}</div>${r.prepTime || r.totalTime ? `<div class="muted">${r.prepTime ? 'Prep ' + esc(r.prepTime) : ''}${r.prepTime && r.totalTime ? ' · ' : ''}${r.totalTime ? 'Total ' + esc(r.totalTime) : ''}</div>` : ''}</div>${star(r)}
@@ -199,6 +208,15 @@ async function home() {
     const r = all.find(x => x.id === s.dataset.id); if (r) toggleFav(r, s).then(() => { if (cat === '__fav') draw(); });
   };
   draw();
+  if (Cfg.url) {
+    Store.list(true).then(fresh => { all = fresh; loading = false; if ($app.querySelector('#grid')) draw(); })
+      .catch(e => {
+        loading = false;
+        if (e instanceof AuthError) return settings(Cfg.key ? 'That passcode didn’t work.' : 'Enter the shared passcode to open the recipes.');
+        const g = $app.querySelector('#grid');
+        if (g) g.innerHTML = `<p>Couldn’t load recipes: ${esc(e.message)}. <a href="#/">Try again</a></p>`;
+      });
+  }
 }
 
 async function recipe(id) {
