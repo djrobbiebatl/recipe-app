@@ -6,7 +6,7 @@
  */
 const SHEET_NAME = 'Recipes';
 const COLS = ['id', 'title', 'category', 'sourceName', 'sourceUrl', 'servings', 'summary',
-              'image', 'ingredients', 'steps', 'addedBy', 'added', 'favorite', 'prepTime', 'totalTime', 'nutrition'];
+              'image', 'ingredients', 'steps', 'addedBy', 'added', 'favorite', 'prepTime', 'totalTime', 'nutrition', 'notes'];
 
 function doGet() { return out_({ ok: true, msg: 'Recipe API is running' }); }
 
@@ -296,7 +296,7 @@ function list_() {
       id: String(o.id), title: o.title, category: o.category, sourceName: o.sourceName, sourceUrl: o.sourceUrl,
       servings: Number(o.servings) || 1, summary: o.summary, image: o.image,
       ingredients: parse_(o.ingredients), steps: parse_(o.steps), addedBy: o.addedBy, added: o.added,
-      favorite: String(o.favorite) === 'true', prepTime: o.prepTime, totalTime: o.totalTime, nutrition: o.nutrition
+      favorite: String(o.favorite) === 'true', prepTime: o.prepTime, totalTime: o.totalTime, nutrition: o.nutrition, notes: o.notes
     };
   }).filter(function (r) { return r.id && r.title; }).reverse();
 }
@@ -315,7 +315,7 @@ function save_(r, name) {
       String(Number(r.servings) || 1), lim(r.summary, 2000), lim(r.image, 2000),
       lim(JSON.stringify(r.ingredients || []), 20000), lim(JSON.stringify(r.steps || []), 20000),
       lim(name, 60), new Date().toISOString(),
-      String(r.favorite === true), lim(r.prepTime, 40), lim(r.totalTime, 40), lim(r.nutrition, 2000)
+      String(r.favorite === true), lim(r.prepTime, 40), lim(r.totalTime, 40), lim(r.nutrition, 2000), lim(r.notes, 4000)
     ];
     const n = sh.getLastRow() - 1;
     let rowNum = 0;

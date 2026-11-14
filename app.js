@@ -232,6 +232,7 @@ async function recipe(id) {
       </section>
       <section><h2>Instructions</h2><ol class="steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol></section>
     </div>
+    ${r.notes ? `<h2>Notes</h2><p class="notes">${esc(r.notes)}</p>` : ''}
     ${r.nutrition ? `<h2>Nutrition</h2><table class="nut">${String(r.nutrition).split('\n').filter(Boolean).map(l => {
       const i = l.indexOf(':'); return i > 0 ? `<tr><td>${esc(l.slice(0, i))}</td><td>${esc(l.slice(i + 1).trim())}</td></tr>` : `<tr><td colspan="2">${esc(l)}</td></tr>`;
     }).join('')}</table>` : ''}`;
@@ -311,6 +312,7 @@ async function add(params, ex) {
       <label class="f">Summary</label><textarea name="summary" rows="2">${esc(v.summary)}</textarea>
       <label class="f">Ingredients — one per line, like “2 cups flour”</label><textarea name="ingredients" rows="6" required>${esc((v.ingredients || []).map(ingText).join('\n'))}</textarea>
       <label class="f">Steps — one per line</label><textarea name="steps" rows="6" required>${esc((v.steps || []).join('\n'))}</textarea>
+      <label class="f">Notes (optional) — tips, changes you made, who loved it</label><textarea name="notes" rows="4">${esc(v.notes)}</textarea>
       <label class="f">Nutrition (optional) — one per line, like “Calories: 250”</label><textarea name="nutrition" rows="4">${esc(v.nutrition)}</textarea>
       <label class="f">Source name</label><input name="sourceName" value="${esc(v.sourceName)}">
       <label class="f">Source link</label>
@@ -451,7 +453,7 @@ async function add(params, ex) {
     const d = Object.fromEntries(new FormData(e.target));
     const rec = { id: ex ? ex.id : uid(), title: d.title.trim(), category: d.category, sourceName: d.sourceName.trim(), sourceUrl: d.sourceUrl.trim(),
       servings: +d.servings || 1, summary: d.summary.trim(), image: d.image.trim(), favorite: ex ? !!ex.favorite : false,
-      prepTime: d.prepTime.trim(), totalTime: d.totalTime.trim(), nutrition: d.nutrition.trim(),
+      prepTime: d.prepTime.trim(), totalTime: d.totalTime.trim(), nutrition: d.nutrition.trim(), notes: d.notes.trim(),
       ingredients: d.ingredients.split('\n').map(parseIngredient).filter(Boolean),
       steps: d.steps.split('\n').map(s => s.replace(/^\s*\d{1,2}[.)]\s+/, '').trim()).filter(Boolean) };
     const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Saving…';
