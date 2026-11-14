@@ -658,7 +658,7 @@ function parseIngredient(line) {
   for (const part of raw.replace(/([½⅓⅔¼¾⅛])/g, ' $1').trim().split(/\s+/)) {
     amt += UNICODE_FRACS[part] ?? (part.includes('/') ? part.split('/').reduce((a, b) => a / b) : parseFloat(part));
   }
-  const rest = m[2].match(/^(cups?|tbsp|tsp|tablespoons?|teaspoons?|oz|ounces?|lbs?|pounds?|g|grams?|kg|ml|l|cloves?|cans?|pinch|dash|slices?)\b\.?\s*(.*)$/i);
+  const rest = m[2].match(/^(cups?|tbsp|tsp|tablespoons?|teaspoons?|oz|ounces?|lbs?|pounds?|g|grams?|kg|ml|l|cloves?|cans?|pinch|dash|slices?|pkts?|pkgs?|packages?|packets?|sticks?|bunch(?:es)?|heads?|jars?|bottles?|boxes|box|sprigs?|stalks?)\b\.?\s*(.*)$/i);
   return rest ? { amt, unit: rest[1], item: rest[2] } : { amt, unit: '', item: m[2] };
 }
 

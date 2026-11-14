@@ -307,11 +307,19 @@ function emlText_(raw) {
 /** Subject + body of an email -> recipe text: title first, forwarding clutter removed. */
 function composeEmail_(rawSubj, body) {
   rawSubj = String(rawSubj || '').trim();
-  let subj = rawSubj.replace(/^\s*((fwd?|fw|re):\s*)+/i, '').trim();
+  // "Fwd:", "Emailing:", "Scanned:" prefixes and a trailing file extension (".doc") are not part of a recipe name.
+  let subj = rawSubj.replace(/^\s*((fwd?|fw|re|emailing|scanned|scan|attached|attachment)\s*:\s*)+/i, '').replace(/\.(docx?|pdf|txt|rtf|jpe?g|png)\s*$/i, '').trim();
   body = String(body || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
   const fw = stripForwarded_(body);
   body = cleanEmailBody_(fw.body);
   if (fw.subject && (!subj || /^\s*(fwd?|fw):/i.test(rawSubj))) subj = fw.subject;   // the original email's subject is the better title
+  // A body line that is the subject minus punctuation ("Shepherds" vs "Shepherd's") is the recipe's real title: use it as written.
+  const alnum = function (x) { return String(x).toLowerCase().replace(/[^a-z0-9]/g, ''); };
+  if (subj) {
+    const bl = body.split('\n');
+    const at = bl.slice(0, 40).findIndex(function (l) { return l.trim() && alnum(l) === alnum(subj); });
+    if (at >= 0) { subj = bl[at].trim(); bl.splice(at, 1); body = bl.join('\n').trim(); }
+  }
   const firstLine = body.split('\n')[0].trim().toLowerCase();
   const s = subj.toLowerCase();
   if (subj && firstLine === s) body = body.split('\n').slice(1).join('\n').trim();   // body repeats the subject
@@ -330,6 +338,8 @@ function cleanEmailBody_(body) {
   const out = [];
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i].trim();
+    if (/^[-_=*~]{4,}$/.test(l)) continue;                                              // "-------" rules
+    if (/^(emailing|scanned|scan|attached|attachment)\s*:\s*.+\.(docx?|pdf|txt|rtf|jpe?g|png)\s*$/i.test(l)) continue;   // copier/scanner filename line
     if (hdr.test(l)) {
       let j = i;
       while (j < lines.length && hdr.test(lines[j].trim())) j++;
@@ -339,7 +349,9 @@ function cleanEmailBody_(body) {
     if (/^on .{5,160}\bwrote:\s*$/i.test(l) || /^(-+\s*)?sent from my\b/i.test(l) || /^get outlook for\b/i.test(l) || /^sent (with|via|using) /i.test(l)) continue;
     out.push(lines[i]);
   }
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  // Legal / "think of the environment" footers are whole paragraphs; drop any paragraph that reads like one.
+  const boiler = /\b(intended (exclusively|solely|only) for|named addressee|may contain (information that is )?(confidential|privileged)|confidential and (may be )?privileged|if you (have )?received this (e-?mail|communication|message|transmission) in error|consider the environment|think before you print|please consider (the )?environment|unauthori[sz]ed (use|disclosure|review))\b/i;
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').split(/\n{2,}/).filter(function (p) { return !boiler.test(p); }).join('\n\n').trim();
 }
 
 /** Drops a sign-off and everything after it ("Thanks, Jo", phone, address, "Sent from my iPhone") from the end of scanned lines. */
@@ -464,7 +476,7 @@ function parseScan_(text) {
   const sv = text.match(/(?:serves|servings?|yields?|makes)\s*:?\s*(\d+)/i);
   if (sv) servings = Number(sv[1]);
 
-  let ing = [], stepsRaw = [], summary = '';
+  let ing = [], stepsRaw = [], summary = '', narIngs = null, narSteps = null;
   if (ingI >= 0 || dirI >= 0) {
     const ingEnd = (dirI > ingI) ? dirI : lines.length;
     if (ingI >= 0) ing = lines.slice(ingI + 1, ingEnd);
@@ -476,8 +488,13 @@ function parseScan_(text) {
       ing = lines.slice(1, dirI).filter(startsQty); summary = '';
     }
   } else { // no headings: quantity-looking lines are ingredients, the rest after them are steps
+    const paras = paragraphs_(raw, lines.length);
+    if (paras.length) { paras[0].shift(); if (!paras[0].length) paras.shift(); }   // the title line
+    const nar = narrative_(paras);
     const first = lines.findIndex(function (l, i) { return i > 0 && startsQty(l); });
-    if (first > 0) {
+    if (nar) {
+      narIngs = nar.ings; narSteps = nar.steps;
+    } else if (first > 0) {
       let end = first; while (end < lines.length && (startsQty(lines[end]) || /^[a-z(]/.test(lines[end]))) end++;
       ing = lines.slice(first, end); stepsRaw = lines.slice(end);
     } else { stepsRaw = lines.slice(1); }
@@ -490,9 +507,10 @@ function parseScan_(text) {
     if (!l) return;
     if (ings.length && /^[a-z(]/.test(l) && !startsQty(l)) ings[ings.length - 1] += ' ' + l; else ings.push(l);
   });
+  if (narIngs) { ings.length = 0; narIngs.forEach(function (x) { ings.push(x); }); }
   // Steps: numbered markers start new steps; otherwise join wrapped lines until a sentence ends.
-  const steps = [];
-  stepsRaw.forEach(function (l) {
+  const steps = narSteps || [];
+  if (!narSteps) stepsRaw.forEach(function (l) {
     const numbered = /^\d{1,2}[.)]\s*\S/.test(l);
     const body = l.replace(/^\d{1,2}[.)]\s*/, '');
     const prevDone = !steps.length || /[.!?)"”]$/.test(steps[steps.length - 1]);
@@ -500,6 +518,71 @@ function parseScan_(text) {
   });
   return { title: title.slice(0, 120), summary: summary, servings: servings, category: guessCategory_(title + ' ' + summary),
            prepTime: prepTime, cookTime: cookTime, totalTime: totalTime, nutrition: nutrition, ingredients: ings, steps: steps };
+}
+
+/** Non-blank lines grouped into paragraphs (split at blank lines), keeping only the first `count` non-blank lines. */
+function paragraphs_(raw, count) {
+  const paras = []; let cur = [], n = 0;
+  for (let i = 0; i < raw.length; i++) {
+    if (!raw[i]) { if (cur.length) { paras.push(cur); cur = []; } continue; }
+    if (n >= count) break;
+    cur.push(raw[i]); n++;
+  }
+  if (cur.length) paras.push(cur);
+  return paras;
+}
+
+/**
+ * Recipes written as prose with no "Ingredients" heading, e.g.
+ *   Brown 1lb ground beef with / Salt / Pepper / Minced garlic        (lead-in line, then a short list)
+ *   Place back over high heat and add / 2 pkt. Gravy mix / 2 cups water / One cup frozen veggies
+ * Finds the lists inside each paragraph and pulls them out as ingredients; the text around them stays as steps
+ * (the lead-in keeps its list inline so the step still reads naturally). Returns null if no list is found.
+ */
+function narrative_(paras) {
+  const NUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+  const words = function (l) { return l.split(/\s+/).length; };
+  const qty = function (l) {
+    return /^[•\-*·]?\s*(\d|[¼½¾⅓⅔⅛]|(one|two|three|four|five|six|seven|eight|nine|ten)\b)/i.test(l) &&
+      !/^\d{1,2}[.)]\s/.test(l) && (!/[.!?]$/.test(l) || words(l) <= 6);
+  };
+  const short = function (l) { return words(l) <= 12 && !/[.!?]$/.test(l); };
+  const leadIn = function (l) { return /(\b(with|add|and add|plus|including|combine|mix in|stir in)|:)\s*$/i.test(l); };
+  const norm = function (l) {
+    return l.replace(/^[•\-*·]\s*/, '').replace(/^(one|two|three|four|five|six|seven|eight|nine|ten)\b/i, function (m) { return NUM[m.toLowerCase()]; })
+      .replace(/^(\d+(?:\.\d+)?)(lbs?|oz|g|kg|ml|cups?|tbsp|tsp)\b/i, '$1 $2').trim();
+  };
+  const ings = [], steps = [];
+  let found = false;
+  const pushSteps = function (ls) {          // join wrapped lines until a sentence ends
+    const out = [];
+    ls.forEach(function (l) {
+      const numbered = /^\d{1,2}[.)]\s*\S/.test(l), body = l.replace(/^\d{1,2}[.)]\s*/, '');
+      if (numbered || !out.length || /[.!?)"”]$/.test(out[out.length - 1])) out.push(body); else out[out.length - 1] += ' ' + body;
+    });
+    out.forEach(function (s) { steps.push(s); });
+  };
+  paras.forEach(function (p) {
+    let k = -1;
+    for (let i = 0; i < p.length; i++) {
+      if (qty(p[i]) || (i > 0 && leadIn(p[i - 1]) && short(p[i]))) { k = i; break; }
+    }
+    if (k < 0) { pushSteps(p); return; }
+    let j = k;
+    while (j < p.length && (qty(p[j]) || short(p[j]))) j++;
+    const items = p.slice(k, j).map(norm).filter(String);
+    const lead = p.slice(0, k);
+    found = true;
+    if (lead.length) {
+      const leadText = lead.join(' ');
+      const q = leadText.match(/(\d+(?:\.\d+)?\s?(?:lbs?|oz|g|kg|ml|cups?|tbsp|tsp|pkt|pkg|cans?|cloves?)\b\.?\s+[a-z][a-z' -]*?)(?=\s+(?:with|and|to|in|over|until)\b|$)/i);
+      if (q) ings.push(norm(q[1]));
+      steps.push(leadIn(lead[lead.length - 1]) ? leadText + ' ' + items.join(', ') + '.' : leadText);
+    }
+    items.forEach(function (x) { ings.push(x); });
+    if (j < p.length) pushSteps(p.slice(j));
+  });
+  return found ? { ings: ings, steps: steps } : null;
 }
 
 function extract_(html, url) {
