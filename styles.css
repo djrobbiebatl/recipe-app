@@ -20,7 +20,7 @@ main{max-width:1000px;margin:0 auto;padding:16px}
 .btn{display:inline-block;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 14px;border-radius:10px;font:inherit;cursor:pointer;text-decoration:none}
 .btn.primary{background:#fff;color:var(--accent);border-color:#fff;font-weight:600}
 main .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
-textarea{resize:vertical}
+textarea{resize:none;overflow:hidden}   /* grows by script as you type; no drag handle */
 input,select,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
 .chip{padding:6px 14px;border-radius:999px;border:1px solid var(--line);background:var(--card);cursor:pointer;font:inherit;color:inherit}

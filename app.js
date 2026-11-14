@@ -456,6 +456,12 @@ async function add(params, ex) {
         <a class="btn cancel" href="${cancelHref}">Cancel</a></p>
     </form>`;
   const f = $app.querySelector('#f'), msg = $app.querySelector('#impmsg'), impBtn = $app.querySelector('#imp');
+  // Text boxes grow to fit what's in them (no drag handle). growAll() is also called after anything fills them in.
+  const fit = t => { t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; };
+  const growAll = () => f.querySelectorAll('textarea').forEach(fit);
+  f.addEventListener('input', e => { if (e.target.tagName === 'TEXTAREA') fit(e.target); });
+  window.onresize = growAll;
+  requestAnimationFrame(growAll);
   const saveLabel = ex ? 'Save changes' : 'Save recipe';
   // Cancel asks first only when there's something typed that would be lost.
   const dirty = () => (ex || intake) ? false : ['title', 'ingredients', 'steps', 'summary', 'notes'].some(k => f.elements[k].value.trim());
@@ -486,6 +492,7 @@ async function add(params, ex) {
       if (r.image) showPrev(r.image);
       if (r.category) setTags(String(r.category).split(','));
       set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
+      growAll();
       msg.textContent = found ? 'Imported — check it over, then save.'
         : 'That page has no recipe data I can read. I filled in what I could — add the rest by hand.';
     } catch (e) {
@@ -518,6 +525,7 @@ async function add(params, ex) {
       if (r.image) showPrev(r.image);
       // (reloading from the link leaves your categories alone)
       set('ingredients', r.ingredients.join('\n')); set('steps', (r.steps || []).join('\n'));
+      growAll();
       msg.textContent = 'Reloaded from the link — check it over, then save.';
       window.scrollTo(0, 0);
     } catch (e) {
@@ -581,6 +589,7 @@ async function add(params, ex) {
     set('sourceName', 'Import');
     if (d.fileUrl) set('sourceUrl', d.fileUrl);
     $app.querySelector('#rawtxt').textContent = d.text || ''; $app.querySelector('#raw').hidden = !d.text;
+    growAll();
     msg.textContent = note || 'Read the file — this is rarely perfect, so check every line before saving.';
     window.scrollTo(0, 0);
   };
