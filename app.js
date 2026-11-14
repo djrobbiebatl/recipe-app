@@ -104,7 +104,7 @@ function settings(msg) {
     ${msg ? `<div class="note">${esc(msg)}</div>` : ''}
     ${Cfg.url ? '' : '<div class="note">Demo mode: the Google Sheet isn’t connected yet, so recipes only save on this device.</div>'}
     <form id="s">
-      <label class="f">Your name (shown as “added by”)</label><input name="name" value="${esc(Cfg.name)}" placeholder="Rob or Damon">
+      <label class="f">Your name (shown as “added by”)</label><input name="name" value="${esc(Cfg.name)}" placeholder="Rob or Daman">
       <label class="f">Shared passcode</label><input name="key" type="password" autocomplete="current-password" value="${esc(Cfg.key)}">
       <p><button class="btn primary" type="submit">Save</button></p>
     </form>`;
