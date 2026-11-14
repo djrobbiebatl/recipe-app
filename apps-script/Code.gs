@@ -115,9 +115,20 @@ function intakeAddAction_(item, address) {
   } finally { lock.releaseLock(); }
 }
 
+/**
+ * Queued text is re-cleaned every time it's read, so improvements to the cleaning rules also fix emails that were
+ * already waiting in the queue (the stored text is the first line = subject, then the body).
+ */
+function intakeClean_(stored) {
+  const nl = String(stored).indexOf('\n');
+  if (nl < 0) return String(stored);
+  return composeEmail_(stored.slice(0, nl), stored.slice(nl + 1));
+}
+
 function intakeListAction_() {
   const items = intakeRows_().filter(function (r) { return r.status === 'pending'; }).reverse().map(function (r) {
-    return { id: r.id, from: r.from, subject: r.subject, date: r.date, snippet: r.text.split('\n').slice(1).join(' ').replace(/\s+/g, ' ').slice(0, 180) };
+    const t = intakeClean_(r.text);
+    return { id: r.id, from: r.from, subject: t.split('\n')[0] || r.subject, date: r.date, snippet: t.split('\n').slice(1).join(' ').replace(/\s+/g, ' ').slice(0, 180) };
   });
   return out_({ ok: true, address: PropertiesService.getScriptProperties().getProperty('INTAKE_ADDRESS') || '', items: items });
 }
@@ -129,7 +140,8 @@ function intakeCountAction_() {
 function intakeGetAction_(id) {
   const r = intakeRows_().filter(function (x) { return x.id === String(id); })[0];
   if (!r) return out_({ ok: false, error: 'That email isn\'t in the queue any more' });
-  return out_({ ok: true, text: r.text.slice(0, 20000), fileUrl: '', from: r.from, recipe: parseScan_(r.text) });
+  const t = intakeClean_(r.text);
+  return out_({ ok: true, text: t.slice(0, 20000), fileUrl: '', from: r.from, recipe: parseScan_(t) });
 }
 
 function intakeMarkAction_(id, status) {
