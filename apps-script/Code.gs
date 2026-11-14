@@ -22,6 +22,8 @@ function doPost(e) {
   if (req.action === 'delete') return delete_(req.id);
   if (req.action === 'scan') return scan_(req.data, req.mime);
   if (req.action === 'upload') return upload_(req.data, req.mime);
+  if (req.action === 'drivelist') return driveList_();
+  if (req.action === 'driveimport') return driveImport_(req.id);
   return out_({ ok: false, error: 'unknown action' });
 }
 
@@ -39,9 +41,63 @@ function delete_(id) {
   } finally { lock.releaseLock(); }
 }
 
+// ---------- import from Drive: a "Recipe Inbox" folder to pick from, or a pasted Drive/Docs link ----------
+const INBOX_NAME = 'Recipe Inbox';
+
+function inbox_() {
+  const it = DriveApp.getFoldersByName(INBOX_NAME);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(INBOX_NAME);
+}
+
+function isRecipeFile_(f) {
+  const m = f.getMimeType();
+  return /^(image\/(jpeg|png|webp|gif)|application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|text\/plain|message\/rfc822|application\/vnd\.google-apps\.document)$/.test(m) ||
+    /\.eml$/i.test(f.getName());
+}
+
+function driveList_() {
+  const folder = inbox_();
+  const files = [];
+  const it = folder.getFiles();
+  while (it.hasNext() && files.length < 100) { const f = it.next(); if (isRecipeFile_(f)) files.push(f); }
+  files.sort(function (a, b) { return b.getLastUpdated().getTime() - a.getLastUpdated().getTime(); });
+  return out_({ ok: true, folderUrl: folder.getUrl(), folderName: INBOX_NAME, files: files.slice(0, 40).map(function (f) {
+    return { id: f.getId(), name: f.getName(), modified: f.getLastUpdated().toISOString() };
+  }) });
+}
+
+function driveImport_(id) {
+  if (!/^[\w-]{10,}$/.test(String(id || ''))) return out_({ ok: false, error: 'That doesn\'t look like a Drive file' });
+  let file;
+  try { file = DriveApp.getFileById(id); }
+  catch (e) { return out_({ ok: false, error: 'I can\'t open that file. It has to be in your Drive or shared with you.' }); }
+  if (file.getMimeType() === 'application/vnd.google-apps.folder') return out_({ ok: false, error: 'That\'s a folder, not a recipe file' });
+  try {
+    const text = textFromFile_(file);
+    if (!text || text.replace(/\s/g, '').length < 20) return out_({ ok: false, error: 'I couldn\'t find any readable text in that file' });
+    const r = parseScan_(text);
+    r.sourceUrl = file.getUrl(); r.sourceName = 'Import';
+    return out_({ ok: true, found: true, text: text.slice(0, 20000), fileUrl: file.getUrl(), recipe: r });
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/Drive is not defined/i.test(msg)) return out_({ ok: false, error: 'The Drive API service isn\'t added to the script yet (Services > + > Drive API)' });
+    if (/permission|authori/i.test(msg)) return out_({ ok: false, error: 'The script needs permission to read Drive. Run "authorize" in Apps Script, then redeploy.' });
+    return out_({ ok: false, error: 'Couldn\'t read that file (' + msg.slice(0, 120) + ')' });
+  }
+}
+
+/** File id from a drive.google.com / docs.google.com link, or '' if it isn't one. */
+function driveIdFromUrl_(url) {
+  const m = String(url).match(/^https?:\/\/(?:drive|docs)\.google\.com\/[^?#]*?\/d\/([\w-]{10,})/i) ||
+            String(url).match(/^https?:\/\/(?:drive|docs)\.google\.com\/[^#]*[?&]id=([\w-]{10,})/i);
+  return m ? m[1] : '';
+}
+
 // ---------- link import (runs here because browsers can't read other sites' pages) ----------
 function import_(url) {
   if (!/^https?:\/\/[^\s]+$/i.test(String(url || ''))) return out_({ ok: false, error: 'That doesn\'t look like a web link' });
+  const driveId = driveIdFromUrl_(url);
+  if (driveId) return driveImport_(driveId);
   let html;
   try {
     const res = UrlFetchApp.fetch(url, {
@@ -90,20 +146,11 @@ function upload_(b64, mime) {
 
 // ---------- photo / PDF scan: Google Drive turns the file into a Doc (with OCR), we read the text ----------
 function scan_(b64, mime) {
-  const okMime = /^(image\/(jpeg|png|webp|gif)|application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|text\/plain)$/;
-  if (!b64 || !okMime.test(String(mime))) return out_({ ok: false, error: 'Please use a photo, PDF, Word document (.doc/.docx) or text file' });
-  let id = null;
+  const okMime = /^(image\/(jpeg|png|webp|gif)|application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|text\/plain|message\/rfc822)$/;
+  if (!b64 || !okMime.test(String(mime))) return out_({ ok: false, error: 'Please use a photo, PDF, Word document (.doc/.docx), text file or email (.eml)' });
   try {
     const blob = Utilities.newBlob(Utilities.base64Decode(b64), mime, 'recipe-scan');
-    let text;
-    if (mime === 'text/plain') {
-      text = blob.getDataAsString('UTF-8');          // plain text needs no conversion
-    } else {
-      // Drive converts photos/PDFs (with OCR) and Word files into a Google Doc, which we read and then delete.
-      const f = Drive.Files.create({ name: 'recipe-scan (temp)', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'en' });
-      id = f.id;
-      text = DocumentApp.openById(id).getBody().getText();
-    }
+    const text = textFromBlob_(blob, mime, '');
     if (!text || text.replace(/\s/g, '').length < 20) return out_({ ok: false, error: 'I couldn\'t find any readable text in that file' });
     let fileUrl = '';
     try { fileUrl = storeFile_(b64, mime, 'recipe-scan-' + Date.now()).viewUrl; } catch (e3) { /* keep going without a link */ }
@@ -113,9 +160,104 @@ function scan_(b64, mime) {
     if (/Drive is not defined/i.test(msg)) return out_({ ok: false, error: 'The Drive API service isn\'t added to the script yet (Services > + > Drive API)' });
     if (/permission|authori/i.test(msg)) return out_({ ok: false, error: 'The script needs permission to scan. Run "authorize" in Apps Script, then redeploy.' });
     return out_({ ok: false, error: 'Scan failed (' + msg.slice(0, 120) + ')' });
-  } finally {
-    if (id) { try { DriveApp.getFileById(id).setTrashed(true); } catch (e2) { /* temp file cleanup is best-effort */ } }
   }
+}
+
+// ---------- reading text out of files (shared by upload, Drive inbox and pasted Drive links) ----------
+/** Text of a Drive file. Google Docs are read directly; everything else goes through textFromBlob_. */
+function textFromFile_(file) {
+  const mime = file.getMimeType();
+  if (mime === 'application/vnd.google-apps.document') return DocumentApp.openById(file.getId()).getBody().getText();
+  return textFromBlob_(file.getBlob(), mime, file.getName());
+}
+
+function textFromBlob_(blob, mime, name) {
+  if (mime === 'text/plain') return blob.getDataAsString('UTF-8');
+  if (mime === 'message/rfc822' || /\.eml$/i.test(name || '')) return emlText_(blob.getDataAsString('UTF-8'));
+  // Drive turns photos/PDFs (with OCR) and Word files into a Google Doc; we read it, then delete it.
+  let id = null;
+  try {
+    const f = Drive.Files.create({ name: 'recipe-scan (temp)', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'en' });
+    id = f.id;
+    return DocumentApp.openById(id).getBody().getText();
+  } finally {
+    if (id) { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) { /* temp file cleanup is best-effort */ } }
+  }
+}
+
+// ---------- email (.eml): subject becomes the first line (the title), then the body text ----------
+function emlText_(raw) {
+  raw = String(raw).replace(/\r\n/g, '\n');
+  const hdrEnd = raw.indexOf('\n\n');
+  const hdr = (hdrEnd < 0 ? raw : raw.slice(0, hdrEnd)).replace(/\n[ \t]+/g, ' ');
+  const subj = decodeWords_(((hdr.match(/^Subject:[ \t]*(.*)$/mi) || [])[1] || '')).replace(/^\s*((fwd?|re):\s*)+/i, '').trim();
+  const parts = mimePart_(raw);
+  let body = parts.plain || htmlToText_(parts.html || '');
+  body = body.replace(/\n{3,}/g, '\n\n').trim();
+  const firstLine = body.split('\n')[0].trim().toLowerCase();
+  if (subj && firstLine === subj.toLowerCase()) body = body.split('\n').slice(1).join('\n').trim();   // body repeats the subject
+  return (subj ? subj + '\n' : '') + body;
+}
+
+/** Walks a MIME message and returns the first text/plain and text/html bodies, decoded. */
+function mimePart_(raw) {
+  const i = raw.indexOf('\n\n');
+  const hdr = (i < 0 ? raw : raw.slice(0, i)).replace(/\n[ \t]+/g, ' ');
+  const body = i < 0 ? '' : raw.slice(i + 2);
+  const h = function (name) { const m = hdr.match(new RegExp('^' + name + ':[ \\t]*(.*)$', 'mi')); return m ? m[1] : ''; };
+  const ctype = h('Content-Type').toLowerCase() || 'text/plain';
+  const out = { plain: '', html: '' };
+  const bm = h('Content-Type').match(/boundary="?([^";]+)"?/i);
+  if (/^multipart\//.test(ctype) && bm) {
+    body.split('--' + bm[1]).slice(1).forEach(function (seg) {
+      if (/^--/.test(seg)) return;                       // closing boundary
+      const p = mimePart_(seg.replace(/^\n/, ''));
+      if (!out.plain && p.plain) out.plain = p.plain;
+      if (!out.html && p.html) out.html = p.html;
+    });
+    return out;
+  }
+  if (/attachment/i.test(h('Content-Disposition'))) return out;
+  const cs = ((h('Content-Type').match(/charset="?([^";\s]+)"?/i) || [])[1] || 'UTF-8');
+  const enc = h('Content-Transfer-Encoding').toLowerCase().trim();
+  let text;
+  if (enc === 'base64') text = bytesToString_(Utilities.base64Decode(body.replace(/\s+/g, '')), cs);
+  else if (enc === 'quoted-printable') text = qpDecode_(body, cs);
+  else text = body;
+  if (/^text\/html/.test(ctype)) out.html = text; else if (/^text\/plain/.test(ctype)) out.plain = text;
+  return out;
+}
+
+function bytesToString_(bytes, charset) {
+  try { return Utilities.newBlob(bytes).getDataAsString(charset || 'UTF-8'); } catch (e) { return Utilities.newBlob(bytes).getDataAsString('UTF-8'); }
+}
+
+function qpDecode_(s, charset) {
+  s = s.replace(/=\n/g, '');
+  const bytes = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charAt(i);
+    if (c === '=' && /^[0-9A-Fa-f]{2}$/.test(s.substr(i + 1, 2))) { bytes.push(parseInt(s.substr(i + 1, 2), 16)); i += 2; }
+    else if (s.charCodeAt(i) < 128) bytes.push(s.charCodeAt(i));
+    else Utilities.newBlob(c).getBytes().forEach(function (b) { bytes.push(b); });
+  }
+  return bytesToString_(bytes.map(function (b) { return b > 127 ? b - 256 : b; }), charset);
+}
+
+/** RFC 2047 encoded words in headers: =?UTF-8?B?...?= and =?UTF-8?Q?...?= */
+function decodeWords_(s) {
+  return String(s).replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, function (_, cs, enc, txt) {
+    try {
+      if (enc.toUpperCase() === 'B') return bytesToString_(Utilities.base64Decode(txt), cs);
+      return qpDecode_(txt.replace(/_/g, ' '), cs);
+    } catch (e) { return txt; }
+  });
+}
+
+function htmlToText_(html) {
+  let t = String(html).replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<li[^>]*>/gi, '\n• ').replace(/<\/(p|div|li|tr|h[1-6]|ul|ol|table)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n');
+  return clean_(t).split('\n').map(function (l) { return l.trim(); }).join('\n');
 }
 
 /** Best-effort split of OCR text into title / summary / servings / ingredients / steps. */
@@ -260,8 +402,8 @@ function steps_(ins) {
 
 function guessCategory_(s) {
   s = String(s).toLowerCase();
-  if (/dessert|cookie|cake|pie\b|brownie|ice cream|cobbler/.test(s)) return 'Dessert';
   if (/breakfast|brunch|pancake|waffle|omelet|oatmeal/.test(s)) return 'Breakfast';
+  if (/dessert|cookie|\bcakes?\b|cheesecake|cupcake|pie\b|brownie|ice cream|cobbler/.test(s)) return 'Dessert';
   if (/appetizer|snack|dip\b|starter/.test(s)) return 'Appetizer';
   if (/drink|beverage|cocktail|smoothie|lemonade/.test(s)) return 'Drink';
   if (/side dish|\bside\b|salad|slaw/.test(s)) return 'Side';

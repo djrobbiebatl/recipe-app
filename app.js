@@ -117,7 +117,7 @@ async function filePayload(file) {
     return { mime: file.type, data: await toB64(file) };
   }
   const ext = (file.name.split('.').pop() || '').toLowerCase();
-  const DOC = { docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', doc: 'application/msword', txt: 'text/plain' };
+  const DOC = { docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', doc: 'application/msword', txt: 'text/plain', eml: 'message/rfc822' };
   if (DOC[ext] || file.type === 'text/plain') {
     if (file.size > 8 * 1024 * 1024) throw new Error('That file is over 8 MB');
     return { mime: DOC[ext] || file.type, data: await toB64(file) };
@@ -342,9 +342,11 @@ async function add(params, ex) {
       <button class="btn primary" id="imp" type="button">Import</button></div>
     <div class="row">
       <button class="btn" id="scan" type="button">📷 Scan photo or file</button>
-      <input id="file" type="file" accept="image/*,application/pdf,.pdf,.doc,.docx,.txt,text/plain" hidden>
-      <span class="muted">Photo, PDF, Word (.doc/.docx) or .txt — or drag a file anywhere on this page</span>
+      <button class="btn" id="drv" type="button">☁️ Import from Drive</button>
+      <input id="file" type="file" accept="image/*,application/pdf,.pdf,.doc,.docx,.txt,.eml,text/plain" hidden>
+      <span class="muted">Photo, PDF, Word, .txt or email (.eml) — or drag a file onto this page. You can also paste a Drive link above.</span>
     </div>
+    <div id="drvbox" class="note" hidden></div>
     </div>
     <p id="impmsg" class="muted"></p>
     <details id="raw" class="note" hidden><summary>Show the scanned text</summary><pre id="rawtxt" style="white-space:pre-wrap"></pre></details>
@@ -378,6 +380,7 @@ async function add(params, ex) {
     </form>`;
   const f = $app.querySelector('#f'), msg = $app.querySelector('#impmsg'), impBtn = $app.querySelector('#imp');
   const saveLabel = ex ? 'Save changes' : 'Save recipe';
+  let applyScanned; // defined below, shared by file upload / Drive picker / pasted Drive links
   const runImport = async () => {
     const url = $app.querySelector('#iu').value.trim();
     if (!url) return;
@@ -387,7 +390,9 @@ async function add(params, ex) {
     try {
       let dup = await findDup(url, '');
       if (dup) return showDup(dup.r);                       // same page: don't import twice
-      const r = (await api({ action: 'import', url })).recipe;
+      const resp = await api({ action: 'import', url });
+      if (resp.text) return await applyScanned(resp);       // it was a Drive / Docs link: handled like an uploaded file
+      const r = resp.recipe;
       dup = await findDup(r.sourceUrl || url, r.title);
       if (dup && dup.by === 'url') return showDup(dup.r);
       if (dup && !confirm(`You already have a recipe called “${dup.r.title}”. Is this a different one? OK = import it anyway, Cancel = skip.`)) return showDup(dup.r);
@@ -472,30 +477,59 @@ async function add(params, ex) {
 
   // ----- photo / PDF scan (Google Drive OCR, done in the Apps Script) -----
   const fileEl = $app.querySelector('#file');
+  // Fills the form from a file-based result (upload, Drive inbox pick, or pasted Drive link).
+  applyScanned = async d => {
+    const r = d.recipe;
+    const dup = await findDup('', r.title);
+    if (dup && !confirm(`You already have a recipe called “${dup.r.title}”. Is this a different one? OK = fill the form anyway, Cancel = skip.`)) {
+      msg.innerHTML = `You already have: <a href="#/r/${esc(dup.r.id)}">${esc(dup.r.title)}</a>`; return;
+    }
+    const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
+    set('title', r.title); set('servings', r.servings); set('summary', r.summary);
+    set('prepTime', r.prepTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
+    if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
+    set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
+    // A file has no web page: link the saved original and mark it as an import.
+    if (d.fileUrl) { set('sourceUrl', d.fileUrl); set('sourceName', 'Import'); }
+    $app.querySelector('#rawtxt').textContent = d.text || ''; $app.querySelector('#raw').hidden = !d.text;
+    msg.textContent = 'Read the file — this is rarely perfect, so check every line before saving.';
+    window.scrollTo(0, 0);
+  };
   const runScan = async file => {
     if (!file) return;
     if (!Cfg.url) { msg.textContent = 'Connect the Google Sheet first — scanning needs it.'; return; }
     msg.textContent = 'Scanning… this can take 10–30 seconds.';
     try {
       const p = await filePayload(file);
-      const d = await api({ action: 'scan', mime: p.mime, data: p.data });
-      const r = d.recipe;
-      const dup = await findDup('', r.title);
-      if (dup && !confirm(`You already have a recipe called “${dup.r.title}”. Is this a different one? OK = fill the form anyway, Cancel = skip.`)) {
-        msg.innerHTML = `You already have: <a href="#/r/${esc(dup.r.id)}">${esc(dup.r.title)}</a>`; return;
-      }
-      const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
-      set('title', r.title); set('servings', r.servings); set('summary', r.summary);
-      set('prepTime', r.prepTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
-      if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
-      set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
-      // An uploaded/scanned source has no web page: link the saved original and mark it as an import.
-      if (d.fileUrl) { set('sourceUrl', d.fileUrl); set('sourceName', 'Import'); }
-      $app.querySelector('#rawtxt').textContent = d.text || ''; $app.querySelector('#raw').hidden = !d.text;
-      msg.textContent = 'Scanned — scans are rarely perfect, so check every line before saving.';
+      await applyScanned(await api({ action: 'scan', mime: p.mime, data: p.data }));
     } catch (e) {
       if (e instanceof AuthError) return settings('Enter the shared passcode first.');
       msg.textContent = 'Couldn’t scan: ' + e.message;
+    }
+  };
+  // ----- pick a recipe file from the "Recipe Inbox" folder in Drive -----
+  const drvBox = $app.querySelector('#drvbox');
+  $app.querySelector('#drv').onclick = async () => {
+    if (!Cfg.url) { msg.textContent = 'Connect the Google Sheet first — Drive import needs it.'; return; }
+    if (!drvBox.hidden) { drvBox.hidden = true; return; }
+    drvBox.hidden = false; drvBox.textContent = 'Looking in your Recipe Inbox folder…';
+    try {
+      const d = await api({ action: 'drivelist' });
+      drvBox.innerHTML = `<p class="muted" style="margin-top:0">Recipe files in your Drive folder “${esc(d.folderName)}”. <a href="${esc(d.folderUrl)}" target="_blank" rel="noopener">Open the folder</a> to add more.</p>` +
+        (d.files.length ? d.files.map(x => `<button class="btn" type="button" data-id="${esc(x.id)}" style="display:block;width:100%;text-align:left;margin:4px 0">📄 ${esc(x.name)} <span class="muted">· ${esc(new Date(x.modified).toLocaleDateString())}</span></button>`).join('')
+          : '<p>The folder is empty. Add recipe files to it, then tap Import from Drive again.</p>');
+    } catch (e) {
+      if (e instanceof AuthError) return settings('Enter the shared passcode first.');
+      drvBox.textContent = 'Couldn’t open Drive: ' + e.message;
+    }
+  };
+  drvBox.onclick = async e => {
+    const b = e.target.closest('[data-id]'); if (!b) return;
+    drvBox.hidden = true; msg.textContent = 'Reading the file…';
+    try { await applyScanned(await api({ action: 'driveimport', id: b.dataset.id })); }
+    catch (err) {
+      if (err instanceof AuthError) return settings('Enter the shared passcode first.');
+      msg.textContent = 'Couldn’t import: ' + err.message;
     }
   };
   $app.querySelector('#scan').onclick = () => fileEl.click();
