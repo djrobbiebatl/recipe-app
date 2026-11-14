@@ -310,11 +310,52 @@ function composeEmail_(rawSubj, body) {
   let subj = rawSubj.replace(/^\s*((fwd?|fw|re):\s*)+/i, '').trim();
   body = String(body || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
   const fw = stripForwarded_(body);
-  body = fw.body;
+  body = cleanEmailBody_(fw.body);
   if (fw.subject && (!subj || /^\s*(fwd?|fw):/i.test(rawSubj))) subj = fw.subject;   // the original email's subject is the better title
   const firstLine = body.split('\n')[0].trim().toLowerCase();
-  if (subj && firstLine === subj.toLowerCase()) body = body.split('\n').slice(1).join('\n').trim();   // body repeats the subject
+  const s = subj.toLowerCase();
+  if (subj && firstLine === s) body = body.split('\n').slice(1).join('\n').trim();   // body repeats the subject
+  // Subject "chili", body starts "Aunt Jo's Chili": the body's own line is the real title, so let it lead.
+  else if (subj && firstLine && firstLine.length <= 80 && (firstLine.indexOf(s) >= 0 || s.indexOf(firstLine) >= 0)) subj = '';
   return (subj ? subj + '\n' : '') + body;
+}
+
+/**
+ * Email leftovers that don't belong in a recipe: forwarding header lines (From/Sent/Date/To/Subject) anywhere in the
+ * text, "On <date>, <name> wrote:" lines, "Sent from my iPhone" style footers, and ">" quote marks.
+ */
+function cleanEmailBody_(body) {
+  const hdr = /^\W*(From|Sent|Date|To|Cc|Bcc|Reply-To|Subject)\W*:/i;
+  const lines = String(body).split('\n').map(function (l) { return l.replace(/^(\s*>)+ ?/, ''); });
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (hdr.test(l)) {
+      let j = i;
+      while (j < lines.length && hdr.test(lines[j].trim())) j++;
+      // two or more in a row is a header block; a lone one only counts if it carries an address or a time
+      if (j - i >= 2 || /@|\b\d{1,2}:\d{2}\b|\b(am|pm)\b/i.test(l)) { i = j - 1; continue; }
+    }
+    if (/^on .{5,160}\bwrote:\s*$/i.test(l) || /^(-+\s*)?sent from my\b/i.test(l) || /^get outlook for\b/i.test(l) || /^sent (with|via|using) /i.test(l)) continue;
+    out.push(lines[i]);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Drops a sign-off and everything after it ("Thanks, Jo", phone, address, "Sent from my iPhone") from the end of scanned lines. */
+function trimSignature_(lines) {
+  // A sign-off word, optionally followed by a name (up to two capitalised words): "Thanks," / "Best, Jo". "Best served warm." is not one.
+  const closing = { test: function (l) {
+    const m = l.match(/^(thanks|thank you|best|best regards|kind regards|warm regards|regards|cheers|sincerely|yours truly|talk soon|xoxo)\b/i);
+    if (!m) return false;
+    return /^([A-Z][\w'-]*\s*){0,2}$/.test(l.slice(m[0].length).replace(/^[,!.]\s*/, '').trim());
+  } };
+  const junk = /^(--+|_{3,})$|^sent from my\b|^get outlook\b|@[\w.-]+\.\w+|^\+?[\d\s().-]{10,}$|^https?:\/\/\S+$|^www\.\S+$/i;
+  const from = Math.max(0, lines.length - 10);
+  for (let i = lines.length - 1; i >= from; i--) {
+    if (closing.test(lines[i].trim())) { lines.length = i; break; }
+  }
+  while (lines.length && junk.test(lines[lines.length - 1].trim())) lines.length--;
 }
 
 /**
@@ -403,6 +444,7 @@ function htmlToText_(html) {
 function parseScan_(text) {
   const raw = String(text).replace(/\r/g, '').split('\n').map(function (l) { return l.replace(/[ \t]+/g, ' ').trim(); });
   const lines = raw.filter(String);
+  trimSignature_(lines);
   const isIng = function (l) { return /^(ingredients?)\s*:?$/i.test(l); };
   const isDir = function (l) { return /^(directions?|instructions?|method|steps?|preparation|procedure)\s*:?$/i.test(l); };
   // Nutrition block (usually last): peel it off first so it doesn't leak into the steps.
