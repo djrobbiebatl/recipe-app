@@ -19,7 +19,22 @@ function doPost(e) {
   if (req.action === 'list') return out_({ ok: true, recipes: list_() });
   if (req.action === 'save') return save_(req.recipe, req.name);
   if (req.action === 'import') return import_(req.url);
+  if (req.action === 'delete') return delete_(req.id);
   return out_({ ok: false, error: 'unknown action' });
+}
+
+function delete_(id) {
+  if (!id) return out_({ ok: false, error: 'missing id' });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = sheet_();
+    const n = sh.getLastRow() - 1;
+    if (n < 1) return out_({ ok: true });
+    const ids = sh.getRange(2, 1, n, 1).getValues();
+    for (let i = ids.length - 1; i >= 0; i--) if (String(ids[i][0]) === String(id)) sh.deleteRow(i + 2);
+    return out_({ ok: true });
+  } finally { lock.releaseLock(); }
 }
 
 // ---------- link import (runs here because browsers can't read other sites' pages) ----------

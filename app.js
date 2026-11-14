@@ -41,6 +41,10 @@ const Store = {
     return this.mem;
   },
   async get(id) { return (await this.list()).find(r => r.id === id); },
+  async remove(id) {
+    if (Cfg.url) { await api({ action: 'delete', id }); await this.list(true); return; }
+    lsSet('recipes.local.v1', (await this.list()).filter(r => r.id !== id));
+  },
   async save(r) {
     if (Cfg.url) {
       await api({ action: 'save', recipe: r, name: Cfg.name });
@@ -79,6 +83,18 @@ const SAMPLE = [
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const safeUrl = u => /^https?:\/\//i.test(u || '') ? u : '';
+// Same recipe = same page (ignoring http/https, www, trailing slash, tracking params) or the same title.
+const normUrl = u => {
+  try {
+    const x = new URL(u);
+    const keep = [...x.searchParams].filter(([k]) => !/^(utm_|fbclid|gclid|ref$|mc_)/i.test(k)).map(([k, v]) => k + '=' + v).sort().join('&');
+    return (x.hostname.replace(/^www\./, '') + x.pathname.replace(/\/+$/, '') + (keep ? '?' + keep : '')).toLowerCase();
+  } catch (e) { return ''; }
+};
+async function findDup(url, title) {
+  const n = normUrl(url), t = (title || '').trim().toLowerCase();
+  return (await Store.list()).find(r => (n && normUrl(r.sourceUrl) === n) || (t && r.title.trim().toLowerCase() === t));
+}
 const uid = () => 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
 function toast(msg) {
@@ -153,6 +169,7 @@ async function recipe(id) {
     <div class="row tools">
       <span class="servings">Servings <button class="btn" id="minus">−</button><input id="sv" type="number" min="1" value="${servings}"><button class="btn" id="plus">+</button></span>
       <button class="btn" id="print">🖨️ Print</button>
+      <button class="btn" id="del">🗑️ Delete</button>
       ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" checked style="width:auto"> with picture</label>' : ''}
     </div>
     <div class="two">
@@ -180,6 +197,11 @@ async function recipe(id) {
   };
   $app.querySelector('#print').onclick = () => {
     const p = $app.querySelector('#pimg'); document.body.classList.toggle('noimg', !!p && !p.checked); window.print();
+  };
+  $app.querySelector('#del').onclick = async () => {
+    if (!confirm(`Delete “${r.title}”? This removes it from the shared sheet for everyone and can't be undone.`)) return;
+    try { await Store.remove(r.id); toast('Deleted'); location.hash = '#/'; }
+    catch (e) { toast('Couldn’t delete: ' + e.message); }
   };
   $app.querySelector('#shop').onclick = async () => {
     const k = servings / (r.servings || 1);
@@ -221,8 +243,13 @@ async function add(params) {
     if (!url) return;
     if (!Cfg.url) { msg.textContent = 'Connect the Google Sheet first — import needs it.'; return; }
     msg.textContent = 'Reading the recipe…'; impBtn.disabled = true;
+    const showDup = d => { msg.innerHTML = `You already have this one: <a href="#/r/${esc(d.id)}">${esc(d.title)}</a>`; };
     try {
+      let dup = await findDup(url, '');
+      if (dup) return showDup(dup);
       const r = (await api({ action: 'import', url })).recipe;
+      dup = await findDup(r.sourceUrl || url, r.title);
+      if (dup) return showDup(dup);
       const found = r.ingredients && r.ingredients.length;
       const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
       set('title', r.title); set('sourceName', r.sourceName); set('sourceUrl', r.sourceUrl || url);
@@ -246,7 +273,10 @@ async function add(params) {
       ingredients: d.ingredients.split('\n').map(parseIngredient).filter(Boolean),
       steps: d.steps.split('\n').map(s => s.replace(/^\s*\d{1,2}[.)]\s+/, '').trim()).filter(Boolean) };
     const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Saving…';
-    try { await Store.save(rec); location.hash = '#/r/' + rec.id; }
+    try {
+      const dup = await findDup(rec.sourceUrl, rec.title);
+      if (dup && !confirm(`“${dup.title}” is already in your recipes. Save another copy anyway?`)) { btn.disabled = false; btn.textContent = 'Save recipe'; return; }
+      await Store.save(rec); location.hash = '#/r/' + rec.id; }
     catch (err) {
       btn.disabled = false; btn.textContent = 'Save recipe';
       if (err instanceof AuthError) return settings('That passcode didn’t work. Check it and try again.');
