@@ -1,7 +1,9 @@
 'use strict';
 /* Our Recipes — step 1 shell. Data layer (Store) is swapped for the Google Sheet API in step 2. */
 
-const CATEGORIES = ['Entrée', 'Side', 'Dessert', 'Breakfast', 'Appetizer', 'Drink'];
+const CATEGORIES = ['Entrée', 'Side', 'Dessert', 'Breakfast', 'Appetizer', 'Drink', 'Crock Pot', 'Instant Pot'];
+// A recipe can carry several categories/tags. They live in the one "category" cell as "Side, Breakfast".
+const tagsOf = r => String(r.category || '').split(',').map(s => s.trim()).filter(Boolean);
 
 // ---------- data layer ----------
 class AuthError extends Error {}
@@ -131,7 +133,7 @@ async function filePayload(file) {
   const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
   return { mime: 'image/jpeg', data: await toB64(blob) };
 }
-const allCats = list => [...CATEGORIES, ...new Set(list.map(r => r.category).filter(c => c && !CATEGORIES.includes(c)))];
+const allCats = list => [...CATEGORIES, ...new Set(list.flatMap(tagsOf).filter(c => !CATEGORIES.includes(c)))];
 // Star toggle shared by the cards and the recipe page. Updates instantly, saves in the background, rolls back on failure.
 async function toggleFav(r, btn) {
   r.favorite = !r.favorite; btn.textContent = r.favorite ? '★' : '☆'; btn.classList.toggle('on', r.favorite);
@@ -191,18 +193,18 @@ async function home() {
     $app.querySelector('#chips').innerHTML = [['', 'All'], ['__fav', '★ Favorites'], ...allCats(all).map(c => [c, c])].map(([v, label]) =>
       `<button class="chip ${cat === v ? 'on' : ''}" data-c="${esc(v)}">${esc(label)}</button>`).join('');
     $app.querySelectorAll('#seg .chip').forEach(b => b.classList.toggle('on', b.dataset.v === view));
-    const hits = all.filter(r => (cat === '__fav' ? r.favorite : (!cat || r.category === cat)) &&
+    const hits = all.filter(r => (cat === '__fav' ? r.favorite : (!cat || tagsOf(r).includes(cat))) &&
       (!q || (r.title + ' ' + r.summary + ' ' + r.ingredients.map(i => i.item).join(' ')).toLowerCase().includes(q)));
     const g = $app.querySelector('#grid');
     g.className = view === 'list' ? 'list' : 'grid';
     g.innerHTML = !hits.length ? `<p class="muted">${loading ? 'Loading recipes… the first load can take up to 20 seconds.' : 'No recipes found.'}</p>` : hits.map(r => view === 'list' ? `
       <a class="lrow" href="#/r/${esc(r.id)}">
         <div class="lthumb"${thumb(r.image)}>${r.image ? '' : '🍽️'}</div>
-        <div class="lbody"><b>${esc(r.title)}</b><div class="muted">${esc(r.category)} · serves ${esc(r.servings)}</div>${timesLine(r) ? `<div class="muted">${esc(timesLine(r))}</div>` : ''}</div>${star(r)}
+        <div class="lbody"><b>${esc(r.title)}</b><div class="muted">${esc(tagsOf(r).join(' · '))} · serves ${esc(r.servings)}</div>${timesLine(r) ? `<div class="muted">${esc(timesLine(r))}</div>` : ''}</div>${star(r)}
       </a>` : `
       <a class="card" href="#/r/${esc(r.id)}">
         <div class="img"${thumb(r.image)}>${r.image ? '' : '🍽️'}${star(r)}</div>
-        <div class="body"><h3>${esc(r.title)}</h3><div class="muted">${esc(r.category)} · serves ${esc(r.servings)}</div></div>
+        <div class="body"><h3>${esc(r.title)}</h3><div class="muted">${esc(tagsOf(r).join(' · '))} · serves ${esc(r.servings)}</div></div>
       </a>`).join('');
   };
   $app.querySelector('#q').oninput = e => { q = e.target.value.trim().toLowerCase(); draw(); };
@@ -234,7 +236,7 @@ async function recipe(id) {
   $app.innerHTML = `
     <a href="#/" class="noprint">← All recipes</a>
     <h1 class="titlerow"><span>${esc(r.title)}</span><button class="star big noprint ${r.favorite ? 'on' : ''}" id="fav" title="Favorite" aria-label="Favorite">${r.favorite ? '★' : '☆'}</button></h1>
-    <div class="muted">${esc(r.category)}<span class="noprint"> · Source: ${src ? `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(r.sourceName || src)}</a>` : esc(r.sourceName)}</span></div>
+    <div class="muted">${esc(tagsOf(r).join(' · '))}<span class="noprint"> · Source: ${src ? `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(r.sourceName || src)}</a>` : esc(r.sourceName)}</span></div>
     ${r.image ? `<img class="hero" src="${esc(safeUrl(r.image))}" alt="" referrerpolicy="no-referrer">` : ''}
     <p>${esc(r.summary)}</p>
     <div class="row facts">
@@ -405,7 +407,8 @@ async function add(params, ex) {
   const cancelHref = ex ? '#/r/' + esc(ex.id) : intake ? '#/review' : '#/';
   const v = ex || {};
   const cats = allCats(await Store.list());
-  if (ex && ex.category && !cats.includes(ex.category)) cats.push(ex.category);
+  tagsOf(v).forEach(t => { if (!cats.includes(t)) cats.push(t); });
+  const picked = new Set(ex ? tagsOf(ex) : ['Entrée']);   // a new recipe starts as Entrée; tap tags to add or remove
   $app.innerHTML = `
     <h1>${ex ? 'Edit recipe' : 'Add a recipe'}</h1>
     <div id="importbox"${ex ? ' hidden' : ''}>
@@ -425,9 +428,11 @@ async function add(params, ex) {
       <p class="savetop"><button class="btn primary" type="submit">${ex ? 'Save changes' : 'Save recipe'}</button>
         <a class="btn cancel" href="${cancelHref}">Cancel</a></p>
       <label class="f">Title</label><input name="title" required value="${esc(ex ? v.title : shared.title)}">
-      <label class="f">Category</label>
-      <div class="row" style="margin-top:0"><select name="category" style="flex:1">${cats.map(c => `<option${v.category === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
-        <button class="btn" id="newcat" type="button">+ New category</button></div>
+      <label class="f">Categories</label>
+      <div class="muted" style="margin:-2px 0 6px">Tap every one that applies — a recipe can have several.</div>
+      <div class="chips" id="tagchips" style="margin:0 0 4px"></div>
+      <input type="hidden" name="category" value="${esc([...picked].join(', '))}">
+      <button class="btn" id="newcat" type="button">+ New category</button>
       <div class="cols4">
         <div><label class="f">Servings</label><input name="servings" type="number" min="1" value="${esc(v.servings || 4)}"></div>
         <div><label class="f">Prep time</label><input name="prepTime" placeholder="15 min" value="${esc(v.prepTime)}"></div>
@@ -479,7 +484,7 @@ async function add(params, ex) {
       set('servings', r.servings); set('image', r.image); set('summary', r.summary);
       set('prepTime', r.prepTime); set('cookTime', r.cookTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
       if (r.image) showPrev(r.image);
-      if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
+      if (r.category) setTags([r.category]);
       set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
       msg.textContent = found ? 'Imported — check it over, then save.'
         : 'That page has no recipe data I can read. I filled in what I could — add the rest by hand.';
@@ -511,7 +516,7 @@ async function add(params, ex) {
       set('title', r.title); set('sourceName', r.sourceName); set('servings', r.servings); set('image', r.image); set('summary', r.summary);
       set('prepTime', r.prepTime); set('cookTime', r.cookTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
       if (r.image) showPrev(r.image);
-      if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
+      // (reloading from the link leaves your categories alone)
       set('ingredients', r.ingredients.join('\n')); set('steps', (r.steps || []).join('\n'));
       msg.textContent = 'Reloaded from the link — check it over, then save.';
       window.scrollTo(0, 0);
@@ -522,14 +527,20 @@ async function add(params, ex) {
   };
 
   // ----- new category, recipe picture -----
-  $app.querySelector('#newcat').onclick = () => {
-    const n = (prompt('New category name:') || '').trim().slice(0, 30);
-    if (!n) return;
-    const sel = f.elements.category;
-    let o = [...sel.options].find(x => x.value.toLowerCase() === n.toLowerCase());
-    if (!o) { o = new Option(n, n); sel.add(o); }
-    sel.value = o.value;
+  const tagBox = $app.querySelector('#tagchips');
+  const drawTags = () => {
+    f.elements.category.value = [...picked].join(', ');
+    tagBox.innerHTML = cats.map(c => `<button type="button" class="chip ${picked.has(c) ? 'on' : ''}" data-tag="${esc(c)}">${esc(c)}</button>`).join('');
   };
+  tagBox.onclick = e => { const b = e.target.closest('[data-tag]'); if (!b) return; const t = b.dataset.tag; picked.has(t) ? picked.delete(t) : picked.add(t); drawTags(); };
+  const addTag = name => {            // adds (and selects) a tag, matching an existing one regardless of capitals
+    const n = String(name || '').replace(/,/g, ' ').trim().slice(0, 30); if (!n) return;
+    const have = cats.find(c => c.toLowerCase() === n.toLowerCase());
+    const t = have || n; if (!have) cats.push(t); picked.add(t); drawTags();
+  };
+  const setTags = names => { picked.clear(); names.forEach(addTag); drawTags(); };   // used when an import guesses a category
+  drawTags();
+  $app.querySelector('#newcat').onclick = () => addTag(prompt('New category name:'));
   const prev = $app.querySelector('#prev');
   const showPrev = u => { if (safeUrl(u)) { prev.referrerPolicy = 'no-referrer'; prev.src = safeUrl(u); prev.hidden = false; } else prev.hidden = true; };
   f.elements.image.oninput = () => showPrev(f.elements.image.value.trim());
@@ -564,7 +575,7 @@ async function add(params, ex) {
     const set = (k, v) => { if (v != null && v !== '') f.elements[k].value = v; };
     set('title', r.title); set('servings', r.servings); set('summary', r.summary);
     set('prepTime', r.prepTime); set('cookTime', r.cookTime); set('totalTime', r.totalTime); set('nutrition', r.nutrition);
-    if ([...f.elements.category.options].some(o => o.value === r.category)) set('category', r.category);
+    if (r.category) setTags([r.category]);
     set('ingredients', (r.ingredients || []).join('\n')); set('steps', (r.steps || []).join('\n'));
     // A file or shared text has no web page: mark it as an import, and link the saved original if there is one.
     set('sourceName', 'Import');
@@ -637,6 +648,7 @@ async function add(params, ex) {
       ingredients: d.ingredients.split('\n').map(parseIngredient).filter(Boolean),
       steps: d.steps.split('\n').map(s => s.replace(/^\s*\d{1,2}[.)]\s+/, '').trim()).filter(Boolean) };
     // Two Save buttons (top and bottom) — keep them in step.
+    if (!picked.size) { toast('Pick at least one category'); return; }
     const setBtns = (off, label) => e.target.querySelectorAll('button[type=submit]').forEach(b => { b.disabled = off; b.textContent = label; });
     setBtns(true, 'Saving…');
     try {

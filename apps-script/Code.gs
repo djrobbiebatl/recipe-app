@@ -765,7 +765,7 @@ function save_(r, name) {
     const sh = sheet_();
     const lim = function (v, n) { return String(v == null ? '' : v).slice(0, n); };
     const row = [
-      lim(r.id, 40), lim(r.title, 200), lim(r.category, 40), lim(r.sourceName, 200), lim(r.sourceUrl, 1000),
+      lim(r.id, 40), lim(r.title, 200), lim(r.category, 160), lim(r.sourceName, 200), lim(r.sourceUrl, 1000),
       String(Number(r.servings) || 1), lim(r.summary, 2000), lim(r.image, 2000),
       lim(JSON.stringify(r.ingredients || []), 20000), lim(JSON.stringify(r.steps || []), 20000),
       lim(name, 60), new Date().toISOString(),
