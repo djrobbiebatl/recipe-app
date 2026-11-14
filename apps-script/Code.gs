@@ -23,7 +23,8 @@ function doPost(e) {
   if (req.action === 'scan') return scan_(req.data, req.mime);
   if (req.action === 'upload') return upload_(req.data, req.mime);
   if (req.action === 'parse') return parseText_(req.text);
-  if (req.action === 'intakesync') return intakeSyncAction_();
+  if (req.action === 'intakeadd') return intakeAddAction_(req.item, req.address);
+  if (req.action === 'intakesync') return intakeListAction_();
   if (req.action === 'intakecount') return intakeCountAction_();
   if (req.action === 'intakeget') return intakeGetAction_(req.id);
   if (req.action === 'intakemark') return intakeMarkAction_(req.id, req.status);
@@ -46,8 +47,8 @@ function delete_(id) {
   } finally { lock.releaseLock(); }
 }
 
-// ---------- email intake: forward a recipe to yourname+recipes@gmail.com, review it later in the app ----------
-// Needs: Services > Gmail API added to this project. Reads mail only (never sends, deletes or changes anything).
+// ---------- email intake: recipes forwarded to a dedicated intake Gmail account wait in the "Intake" tab ----------
+// This script has NO access to any mailbox. The separate intake account runs apps-script/Intake.gs, which pushes emails here.
 const INTAKE_COLS = ['id', 'from', 'subject', 'date', 'text', 'status', 'added'];
 
 function intakeSheet_() {
@@ -70,58 +71,35 @@ function intakeRows_() {
   });
 }
 
-function intakeAddress_() {
-  const addr = String(Gmail.Users.getProfile('me').emailAddress);
-  const at = addr.lastIndexOf('@');
-  return addr.slice(0, at) + '+recipes' + addr.slice(at);
-}
-
-/** Pulls new forwarded emails from Gmail into the Intake tab (max 10 per run). Returns how many were added. */
-function intakeSync_() {
-  const plus = intakeAddress_();
+/**
+ * Called by the small "Intake.gs" script that lives in the SEPARATE intake Google account. It pushes each new email
+ * here (with the shared passcode). This script never touches any mailbox itself.
+ */
+function intakeAddAction_(item, address) {
+  if (!item || !item.id) return out_({ ok: false, error: 'bad email' });
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(address || ''))) PropertiesService.getScriptProperties().setProperty('INTAKE_ADDRESS', String(address).slice(0, 120));
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
   try {
     const rows = intakeRows_();
-    const known = {};
-    rows.forEach(function (r) { known[r.id] = true; });
-    const pending = rows.filter(function (r) { return r.status === 'pending'; }).length;
-    const q = '(to:' + plus + ' OR deliveredto:' + plus + ' OR label:recipe-intake)';
-    const res = Gmail.Users.Messages.list('me', { q: q, maxResults: 60 });
+    const id = String(item.id).slice(0, 80);
+    if (rows.some(function (r) { return r.id === id; })) return out_({ ok: true, duplicate: true });
+    if (rows.filter(function (r) { return r.status === 'pending'; }).length >= 150) return out_({ ok: false, error: 'queue is full' });
+    const text = composeEmail_(String(item.subject || '').slice(0, 300), String(item.plain || '').slice(0, 60000)).slice(0, 40000);
+    const empty = text.replace(/\s/g, '').length < 20;
+    const row = [id, String(item.from || '').slice(0, 200), text.split('\n')[0].slice(0, 200), String(item.date || new Date().toISOString()).slice(0, 40),
+                 text, empty ? 'skipped' : 'pending', new Date().toISOString()];
     const sh = intakeSheet_();
-    let added = 0;
-    (res.messages || []).forEach(function (m) {
-      if (known[m.id] || added >= 10 || pending + added >= 150) return;
-      const g = Gmail.Users.Messages.get('me', m.id, { format: 'raw' });
-      const raw = Utilities.newBlob(Utilities.base64DecodeWebSafe(g.raw)).getDataAsString('UTF-8');
-      const text = emlText_(raw).slice(0, 40000);
-      const headers = raw.replace(/\r\n/g, '\n').split('\n\n')[0].replace(/\n[ \t]+/g, ' ');
-      const from = decodeWords_((headers.match(/^From:[ \t]*(.*)$/mi) || [])[1] || '').slice(0, 200);
-      const empty = text.replace(/\s/g, '').length < 20;
-      const row = [m.id, from, text.split('\n')[0].slice(0, 200), new Date(Number(g.internalDate)).toISOString(), text, empty ? 'skipped' : 'pending', new Date().toISOString()];
-      const at = sh.getLastRow() + 1;
-      sh.getRange(at, 1, 1, INTAKE_COLS.length).setNumberFormat('@').setValues([row]);
-      added++;
-    });
-    return added;
+    sh.getRange(sh.getLastRow() + 1, 1, 1, INTAKE_COLS.length).setNumberFormat('@').setValues([row]);
+    return out_({ ok: true });
   } finally { lock.releaseLock(); }
 }
 
-function intakeGmailError_(e) {
-  const msg = String(e && e.message || e);
-  if (/Gmail is not defined/i.test(msg)) return 'The Gmail API service isn\'t added to the script yet (Services > + > Gmail API).';
-  if (/permission|authori|insufficient/i.test(msg)) return 'The script needs permission to read Gmail. Run "authorize" in Apps Script, then redeploy.';
-  return 'Couldn\'t check email (' + msg.slice(0, 120) + ')';
-}
-
-function intakeSyncAction_() {
-  try { intakeSync_(); } catch (e) { return out_({ ok: false, error: intakeGmailError_(e) }); }
+function intakeListAction_() {
   const items = intakeRows_().filter(function (r) { return r.status === 'pending'; }).reverse().map(function (r) {
     return { id: r.id, from: r.from, subject: r.subject, date: r.date, snippet: r.text.split('\n').slice(1).join(' ').replace(/\s+/g, ' ').slice(0, 180) };
   });
-  let address = '';
-  try { address = intakeAddress_(); } catch (e) { /* shown only as a convenience */ }
-  return out_({ ok: true, address: address, items: items });
+  return out_({ ok: true, address: PropertiesService.getScriptProperties().getProperty('INTAKE_ADDRESS') || '', items: items });
 }
 
 function intakeCountAction_() {
@@ -144,14 +122,6 @@ function intakeMarkAction_(id, status) {
     return out_({ ok: true });
   } finally { lock.releaseLock(); }
 }
-
-/** Optional: run once from the editor so new emails are collected every 10 minutes even if the app is closed. */
-function setupIntakeTrigger() {
-  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'intakeTick_') ScriptApp.deleteTrigger(t); });
-  ScriptApp.newTrigger('intakeTick_').timeBased().everyMinutes(10).create();
-  Logger.log('Email intake will now check every 10 minutes.');
-}
-function intakeTick_() { try { intakeSync_(); } catch (e) { /* the app shows errors when you open Review */ } }
 
 // ---------- import from Drive: a "Recipe Inbox" folder to pick from, or a pasted Drive/Docs link ----------
 const INBOX_NAME = 'Recipe Inbox';
@@ -235,7 +205,6 @@ function authorize() {
   UrlFetchApp.fetch('https://example.com');
   const d = DocumentApp.create('authorize-test (safe to delete)');
   DriveApp.getFileById(d.getId()).setTrashed(true);
-  try { Gmail.Users.getProfile('me'); } catch (e) { Logger.log('Gmail not set up yet: add Services > Gmail API, then run authorize again. (' + e.message + ')'); }
   Logger.log('Authorized. Now redeploy: Deploy > Manage deployments > edit > New version.');
 }
 
@@ -311,10 +280,15 @@ function emlText_(raw) {
   const hdrEnd = raw.indexOf('\n\n');
   const hdr = (hdrEnd < 0 ? raw : raw.slice(0, hdrEnd)).replace(/\n[ \t]+/g, ' ');
   const rawSubj = decodeWords_(((hdr.match(/^Subject:[ \t]*(.*)$/mi) || [])[1] || '')).trim();
-  let subj = rawSubj.replace(/^\s*((fwd?|fw|re):\s*)+/i, '').trim();
   const parts = mimePart_(raw);
-  let body = parts.plain || htmlToText_(parts.html || '');
-  body = body.replace(/\n{3,}/g, '\n\n').trim();
+  return composeEmail_(rawSubj, parts.plain || htmlToText_(parts.html || ''));
+}
+
+/** Subject + body of an email -> recipe text: title first, forwarding clutter removed. */
+function composeEmail_(rawSubj, body) {
+  rawSubj = String(rawSubj || '').trim();
+  let subj = rawSubj.replace(/^\s*((fwd?|fw|re):\s*)+/i, '').trim();
+  body = String(body || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
   const fw = stripForwarded_(body);
   body = fw.body;
   if (fw.subject && (!subj || /^\s*(fwd?|fw):/i.test(rawSubj))) subj = fw.subject;   // the original email's subject is the better title

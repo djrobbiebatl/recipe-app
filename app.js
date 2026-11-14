@@ -355,7 +355,8 @@ async function review() {
   setBadge(d.items.length);
   const draw = () => {
     rv.innerHTML = (d.address ? `<div class="note">Forward recipes to: <b id="addr">${esc(d.address)}</b> <button class="btn" id="copyaddr" type="button">Copy</button>
-        <div class="muted">Anyone who has this address can send recipes here. Nothing goes live until you post it.</div></div>` : '') +
+        <div class="muted">Anyone who has this address can send recipes here. Nothing goes live until you post it.</div></div>`
+        : '<div class="note">The email address will show here after the intake account sends its first email to the app. See the setup steps at the top of <b>Intake.gs</b> in the project.</div>') +
       (d.items.length ? d.items.map(i => `
         <div class="qitem" data-id="${esc(i.id)}">
           <b>${esc(i.subject || '(no subject)')}</b>
