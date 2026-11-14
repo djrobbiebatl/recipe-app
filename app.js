@@ -267,7 +267,7 @@ async function recipe(id) {
     const k = servings / (r.servings || 1);
     $app.querySelector('#ing').innerHTML = r.ingredients.map((i, n) =>
       `<tr class="${missing.has(n) ? 'missing' : ''}"><td class="chk"><input type="checkbox" data-n="${n}" ${missing.has(n) ? 'checked' : ''}></td>
-       <td class="amt">${esc((fmtAmt(i.amt == null ? null : i.amt * k) + ' ' + (i.unit || '')).trim())}</td><td>${esc(i.item)}</td></tr>`).join('');
+       <td class="amt">${esc(amtText(i, k))}</td><td>${esc(i.item)}</td></tr>`).join('');
   };
   const setServ = v => { servings = Math.max(1, Math.round(v) || 1); $app.querySelector('#sv').value = servings; drawIng(); };
   $app.querySelector('#sv').onchange = e => setServ(+e.target.value);
@@ -327,6 +327,13 @@ function marinateLine(steps) {
 }
 
 const timesLine = r => [r.prepTime && 'Prep ' + r.prepTime, r.cookTime && 'Cook ' + r.cookTime, r.totalTime && 'Total ' + r.totalTime].filter(Boolean).join(' · ');
+// The Amount column. No quantity at all means "season it yourself": seasonings read "To taste", anything else "Desired".
+const SEASONING = /\b(salt|pepper|seasoning|spices?|powder|paprika|cumin|oregano|basil|thyme|parsley|rosemary|sage|cinnamon|nutmeg|garlic|herbs?|cayenne|chili flakes|red pepper flakes|bay leaf|vanilla|worcestershire|hot sauce)\b/i;
+function amtText(i, k) {
+  const a = ((i.amt == null ? '' : fmtAmt(i.amt * k)) + ' ' + (i.unit || '')).trim();
+  if (a) return a;
+  return SEASONING.test(i.item) || /to taste/i.test(i.item) ? 'To taste' : 'Desired';
+}
 const ingText = i => ((i.amt == null ? '' : fmtAmt(i.amt)) + ' ' + (i.unit || '') + ' ' + i.item).replace(/\s+/g, ' ').trim();
 
 // One screen for both adding (ex = undefined) and editing (ex = the saved recipe).
