@@ -781,7 +781,8 @@ async function pantry() {
               <span class="muted" style="display:block">${x.used.length ? 'You have: ' + esc(x.used.join(', ')) : ''}${x.minutes ? ' · ' + x.minutes + ' min' : ''}</span>
               ${x.missed.length ? `<span class="muted" style="display:block">Also needs: ${esc(x.missed.join(', '))}</span>` : ''}
               <span class="row" style="margin:6px 0 0">${safeUrl(x.url) ? `<a class="btn" href="${esc(safeUrl(x.url))}" target="_blank" rel="noopener">View</a><button class="btn primary" data-save="${n}">Save to my recipes</button>` : safeUrl(x.page) ? `<a class="btn" href="${esc(safeUrl(x.page))}" target="_blank" rel="noopener">View</a>` : ''}</span></div></div>`).join('')}</div>`
-          : '<p class="muted">Nothing found on the web for that combination — try fewer ingredients.</p>')
+          : `<p class="muted">No web recipe found that uses all of: ${esc(terms.join(', '))}. Try dropping one ingredient.</p>`)
+          + (d.results.length && d.results.length < 5 ? `<p class="muted">Only ${d.results.length} found that use everything you typed — drop an ingredient for more ideas.</p>` : '')
           + '<p class="muted">Recipe ideas powered by <a href="https://spoonacular.com/food-api" target="_blank" rel="noopener">spoonacular</a>.</p>';
         web.querySelectorAll('[data-save]').forEach(s => s.onclick = () => { const x = d.results[+s.dataset.save]; window.__shared = { title: x.title, url: x.url }; location.hash = '#/add'; });
       } catch (err) { web.innerHTML = `<p>${esc(err.message)}</p>`; if (err instanceof AuthError) throw err; }

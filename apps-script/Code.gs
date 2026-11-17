@@ -318,6 +318,13 @@ function planDelete_(id) {
 }
 
 // ---------- Pantry tab: web suggestions from Spoonacular's free plan (key is the Script property SPOONACULAR_KEY) ----------
+const WEB_WEAK = ['mix', 'fresh', 'frozen', 'canned', 'dried', 'boneless', 'skinless', 'whole', 'large', 'small', 'medium', 'of', 'the', 'a'];
+function webWords_(s) {
+  return String(s).toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean).map(function (w) {
+    return /ies$/.test(w) ? w.slice(0, -3) + 'y' : /oes$/.test(w) ? w.slice(0, -2) : (/s$/.test(w) && !/ss$/.test(w)) ? w.slice(0, -1) : w;
+  });
+}
+
 function webSuggest_(terms) {
   const key = PropertiesService.getScriptProperties().getProperty('SPOONACULAR_KEY');
   if (!key) return out_({ ok: false, error: 'The web search key isn\'t set up yet (Script property SPOONACULAR_KEY).' });
@@ -325,12 +332,20 @@ function webSuggest_(terms) {
   if (!list.length) return out_({ ok: false, error: 'Type a few ingredients first' });
   const opts = { muteHttpExceptions: true, headers: { 'x-api-key': key } };
   const base = 'https://api.spoonacular.com/recipes/';
-  const found = UrlFetchApp.fetch(base + 'findByIngredients?number=6&ranking=1&ignorePantry=true&ingredients=' + encodeURIComponent(list.join(',')), opts);
+  // Spoonacular treats "include these ingredients" as "any of these", so ask for the best 100 (most-used first) and keep only
+  // recipes that use EVERY ingredient typed.
+  const found = UrlFetchApp.fetch(base + 'complexSearch?number=100&sort=max-used-ingredients&fillIngredients=true&includeIngredients=' + encodeURIComponent(list.join(',')), opts);
   const code = found.getResponseCode();
   if (code === 402 || code === 429) return out_({ ok: false, error: 'The free web-search allowance is used up for now. Try again tomorrow — your saved recipes still work.' });
   if (code === 401 || code === 403) return out_({ ok: false, error: 'The web search key was rejected — check SPOONACULAR_KEY.' });
   if (code !== 200) return out_({ ok: false, error: 'The web search service had a problem (' + code + '). Try again later.' });
-  const hits = JSON.parse(found.getContentText());
+  const hits = (JSON.parse(found.getContentText()).results || []).filter(function (h) {
+    const used = (h.usedIngredients || []).map(function (i) { return webWords_(i.name); });
+    return list.every(function (t) {
+      const all = webWords_(t), core = all.filter(function (w) { return WEB_WEAK.indexOf(w) < 0; }), need = core.length ? core : all;
+      return need.length && used.some(function (u) { return need.every(function (w) { return u.indexOf(w) >= 0; }); });
+    });
+  }).slice(0, 6);
   if (!hits.length) return out_({ ok: true, results: [] });
   // The first call has no web address for the recipe; one bulk lookup adds it (plus time and servings).
   const info = {};
