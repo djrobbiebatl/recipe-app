@@ -248,7 +248,7 @@ async function recipe(id) {
       <a class="btn" href="#/edit/${esc(r.id)}">✏️ Edit</a>
       <button class="btn" id="del">🗑️ Delete</button>
       ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" style="width:auto"> print with picture</label>' : ''}
-      <span class="noprint cal"><input type="date" id="pdate" value="${ymd(new Date())}" aria-label="Dinner date"><button class="btn" id="plan">📅 Add to calendar</button></span>
+      <span class="noprint cal"><button class="btn" id="plan">📅 Add to calendar</button><input type="date" id="pdate" tabindex="-1" aria-hidden="true"></span>
       <label class="noprint" id="awakeRow" hidden><input type="checkbox" id="awake" style="width:auto"> keep screen on</label>
     </div>
     ${preheatLine(r.steps) ? `<p class="preheat">🔥 ${esc(preheatLine(r.steps))}</p>` : ''}
@@ -306,10 +306,15 @@ async function recipe(id) {
     // leaving this recipe releases the lock
     window.addEventListener('hashchange', () => { drop(); document.removeEventListener('visibilitychange', back); }, { once: true });
   }
-  $app.querySelector('#plan').onclick = async e => {
-    const date = $app.querySelector('#pdate').value;
-    if (!date) return toast('Pick a date first');
-    const b = e.currentTarget; b.disabled = true;
+  // One button: tapping it opens the date picker; choosing a date adds the recipe to that night.
+  const pd = $app.querySelector('#pdate');
+  $app.querySelector('#plan').onclick = () => {
+    pd.value = '';   // empty, so picking today still counts as a change
+    try { pd.showPicker(); } catch (e) { pd.focus(); pd.click(); }
+  };
+  pd.onchange = async () => {
+    const date = pd.value; if (!date) return;
+    const b = $app.querySelector('#plan'); b.disabled = true;
     try {
       const d = await api({ action: 'planadd', date, recipeId: r.id, title: r.title });
       toast(d.already ? 'Already on the calendar for that night' : 'Added to ' + niceDate(date));
