@@ -28,6 +28,10 @@ function doPost(e) {
   if (req.action === 'intakecount') return intakeCountAction_();
   if (req.action === 'intakeget') return intakeGetAction_(req.id);
   if (req.action === 'intakemark') return intakeMarkAction_(req.id, req.status);
+  if (req.action === 'shoplist') return out_({ ok: true, items: shopRows_().map(shopOut_) });
+  if (req.action === 'shopadd') return shopAdd_(req.items, req.recipe);
+  if (req.action === 'shopset') return shopSet_(req.id, req.done);
+  if (req.action === 'shopdelete') return shopDelete_(req.id, req.mode);
   if (req.action === 'drivelist') return driveList_();
   if (req.action === 'driveimport') return driveImport_(req.id);
   return out_({ ok: false, error: 'unknown action' });
@@ -151,6 +155,107 @@ function intakeMarkAction_(id, status) {
   try {
     const r = intakeRows_().filter(function (x) { return x.id === String(id); })[0];
     if (r) intakeSheet_().getRange(r.row, 6).setValue(status);
+    return out_({ ok: true });
+  } finally { lock.releaseLock(); }
+}
+
+// ---------- weekly shopping list: shared by everyone, kept in the "Shopping" tab ----------
+const SHOP_COLS = ['id', 'item', 'amt', 'unit', 'recipes', 'done', 'added'];
+
+function shopSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName('Shopping');
+  if (!sh) {
+    sh = ss.insertSheet('Shopping');
+    sh.getRange(1, 1, 1, SHOP_COLS.length).setNumberFormat('@').setValues([SHOP_COLS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function shopRows_() {
+  const sh = shopSheet_();
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return [];
+  return sh.getRange(2, 1, n, SHOP_COLS.length).getValues().map(function (r, i) {
+    return { row: i + 2, id: String(r[0]), item: String(r[1]), amt: String(r[2]), unit: String(r[3]), recipes: String(r[4]), done: String(r[5]) === 'yes', added: String(r[6]) };
+  });
+}
+
+function shopOut_(r) {
+  return { id: r.id, item: r.item, amt: r.amt === '' ? null : Number(r.amt), unit: r.unit, recipes: r.recipes ? r.recipes.split(' | ') : [], done: r.done };
+}
+
+const SHOP_UNITS = { tablespoon: 'tbsp', tablespoons: 'tbsp', tbsps: 'tbsp', teaspoon: 'tsp', teaspoons: 'tsp', tsps: 'tsp', cups: 'cup', ounce: 'oz', ounces: 'oz',
+  pound: 'lb', pounds: 'lb', lbs: 'lb', gram: 'g', grams: 'g', cloves: 'clove', cans: 'can', slices: 'slice', packages: 'package', pkg: 'package', pkgs: 'package',
+  packets: 'packet', pkt: 'packet', pkts: 'packet', sticks: 'stick', bunches: 'bunch', heads: 'head', jars: 'jar', bottles: 'bottle', boxes: 'box', sprigs: 'sprig', stalks: 'stalk' };
+
+function shopUnitKey_(u) {
+  const k = String(u || '').toLowerCase().replace(/\./g, '').trim();
+  return SHOP_UNITS[k] || k;
+}
+function shopItemKey_(s) {
+  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim().replace(/(ies)$/, 'y').replace(/(es)$/, '').replace(/s$/, '');
+}
+
+/** items: [{amt, unit, item}] from one recipe (or typed by hand, recipe ''). Same item + same unit adds up; otherwise a new line. */
+function shopAdd_(items, recipe) {
+  if (!items || !items.length) return out_({ ok: false, error: 'nothing to add' });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = shopSheet_();
+    const rows = shopRows_();
+    const stamp = new Date().toISOString();
+    let merged = 0, created = 0;
+    items.slice(0, 80).forEach(function (it) {
+      const name = String(it.item || '').trim().slice(0, 200);
+      if (!name) return;
+      const amt = (it.amt === null || it.amt === undefined || it.amt === '' || isNaN(Number(it.amt))) ? null : Number(it.amt);
+      const unit = String(it.unit || '').trim().slice(0, 30);
+      const hit = rows.filter(function (r) {
+        return !r.done && shopItemKey_(r.item) === shopItemKey_(name) && shopUnitKey_(r.unit) === shopUnitKey_(unit) && (r.amt === '') === (amt === null);
+      })[0];
+      if (hit) {
+        const list = hit.recipes ? hit.recipes.split(' | ') : [];
+        if (recipe && list.indexOf(recipe) < 0) list.push(recipe);
+        hit.recipes = list.join(' | ');
+        if (amt !== null) hit.amt = String(Math.round((Number(hit.amt) + amt) * 1000) / 1000);
+        sh.getRange(hit.row, 3, 1, 1).setValue(hit.amt);
+        sh.getRange(hit.row, 5, 1, 1).setValue(hit.recipes);
+        merged++;
+      } else {
+        const row = [Utilities.getUuid(), name, amt === null ? '' : String(amt), unit, recipe ? String(recipe).slice(0, 120) : '', '', stamp];
+        sh.appendRow(row);
+        rows.push({ row: sh.getLastRow(), id: row[0], item: name, amt: row[2], unit: unit, recipes: row[4], done: false, added: stamp });
+        created++;
+      }
+    });
+    return out_({ ok: true, added: created, merged: merged, items: shopRows_().map(shopOut_) });
+  } finally { lock.releaseLock(); }
+}
+
+function shopSet_(id, done) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const r = shopRows_().filter(function (x) { return x.id === String(id); })[0];
+    if (r) shopSheet_().getRange(r.row, 6).setValue(done ? 'yes' : '');
+    return out_({ ok: true });
+  } finally { lock.releaseLock(); }
+}
+
+/** mode 'one' (with id), 'done' (ticked items), or 'all'. */
+function shopDelete_(id, mode) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = shopSheet_();
+    const rows = shopRows_();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      if ((mode === 'one' && r.id === String(id)) || (mode === 'done' && r.done) || mode === 'all') sh.deleteRow(r.row);
+    }
     return out_({ ok: true });
   } finally { lock.releaseLock(); }
 }

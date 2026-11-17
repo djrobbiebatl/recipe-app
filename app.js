@@ -19,7 +19,7 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 async function api(body) {
   if (!Cfg.key) throw new AuthError('no passcode');
   // text/plain keeps this a "simple" request, so the browser skips the CORS preflight Apps Script can't answer.
-  const quick = ['list', 'save', 'delete'].includes(body.action);
+  const quick = ['list', 'save', 'delete', 'shoplist', 'shopadd', 'shopset', 'shopdelete'].includes(body.action);
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), quick ? 40000 : 120000);
   let data;
   try {
@@ -248,6 +248,7 @@ async function recipe(id) {
       <a class="btn" href="#/edit/${esc(r.id)}">✏️ Edit</a>
       <button class="btn" id="del">🗑️ Delete</button>
       ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" style="width:auto"> print with picture</label>' : ''}
+      <label class="noprint" id="awakeRow" hidden><input type="checkbox" id="awake" style="width:auto"> keep screen on</label>
     </div>
     ${preheatLine(r.steps) ? `<p class="preheat">🔥 ${esc(preheatLine(r.steps))}</p>` : ''}
     ${marinateLine(r.steps) ? `<p class="preheat">⏱️ ${esc(marinateLine(r.steps))}</p>` : ''}
@@ -256,7 +257,7 @@ async function recipe(id) {
         <h2>Ingredients</h2>
         <p class="muted noprint">Tick what you <b>don’t</b> have.</p>
         <table class="ing" id="ing"></table>
-        <div class="row tools"><button class="btn primary" id="shop">Add to shopping list</button></div>
+        <div class="row tools"><button class="btn primary" id="weekly">🛒 Add to weekly list</button><button class="btn" id="shop">Send to Keep / copy</button></div>
       </section>
       <section><h2>Instructions</h2><ol class="steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol></section>
     </div>
@@ -288,6 +289,36 @@ async function recipe(id) {
     if (!confirm(`Delete “${r.title}”? This removes it from the shared sheet for everyone and can't be undone.`)) return;
     try { await Store.remove(r.id); toast('Deleted'); location.hash = '#/'; }
     catch (e) { toast('Couldn’t delete: ' + e.message); }
+  };
+  // Keep the screen on while cooking (Screen Wake Lock). Phones drop the lock when the app is hidden, so ask again on return.
+  if ('wakeLock' in navigator) {
+    const box = $app.querySelector('#awake'); $app.querySelector('#awakeRow').hidden = false;
+    let lock = null;
+    const grab = async () => {
+      try { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => { lock = null; }); }
+      catch (e) { box.checked = false; toast('Couldn’t keep the screen on'); }
+    };
+    const drop = () => { try { if (lock) lock.release(); } catch (e) {} lock = null; };
+    box.onchange = () => box.checked ? grab() : drop();
+    const back = () => { if (!document.body.contains(box)) { document.removeEventListener('visibilitychange', back); drop(); return; } if (document.visibilityState === 'visible' && box.checked && !lock) grab(); };
+    document.addEventListener('visibilitychange', back);
+    // leaving this recipe releases the lock
+    window.addEventListener('hashchange', () => { drop(); document.removeEventListener('visibilitychange', back); }, { once: true });
+  }
+  const chosen = () => {
+    const k = servings / (r.servings || 1);
+    return [...missing].sort((a, b) => a - b).map(n => { const i = r.ingredients[n]; return { amt: i.amt == null ? null : Math.round(i.amt * k * 1000) / 1000, unit: i.unit || '', item: i.item }; });
+  };
+  $app.querySelector('#weekly').onclick = async e => {
+    const items = chosen();
+    if (!items.length) return toast('Tick the ingredients you need first');
+    const b = e.currentTarget; b.disabled = true;
+    try {
+      const d = await api({ action: 'shopadd', items, recipe: r.title });
+      toast(`Added to the weekly list${d.merged ? ' (' + d.merged + ' combined with items already there)' : ''}`);
+      missing.clear(); drawIng();
+    } catch (err) { toast('Couldn’t add: ' + err.message); }
+    b.disabled = false;
   };
   $app.querySelector('#shop').onclick = async () => {
     const k = servings / (r.servings || 1);
@@ -690,13 +721,69 @@ function parseIngredient(line) {
   return rest ? { amt, unit: rest[1], item: rest[2] } : { amt, unit: '', item: m[2] };
 }
 
+// ---------- Shopping tab: one weekly list shared by everyone ----------
+const shopText = i => ((i.amt == null ? '' : fmtAmt(i.amt)) + ' ' + (i.unit || '') + ' ' + i.item).replace(/\s+/g, ' ').trim();
+async function shopping() {
+  $app.innerHTML = '<p class="muted">Loading the shopping list…</p>';
+  let items = (await api({ action: 'shoplist' })).items;
+  const draw = () => {
+    const open = items.filter(i => !i.done), done = items.filter(i => i.done);
+    const row = i => `<li class="shop ${i.done ? 'done' : ''}"><label><input type="checkbox" data-id="${esc(i.id)}" ${i.done ? 'checked' : ''}>
+      <span><b>${esc(shopText(i))}</b>${i.recipes.length ? `<span class="muted"> · ${esc(i.recipes.join(', '))}</span>` : ''}</span></label>
+      <button class="x" data-del="${esc(i.id)}" title="Remove" aria-label="Remove">✕</button></li>`;
+    $app.innerHTML = `
+      <h1>🛒 Shopping</h1>
+      <form class="row" id="addf"><input id="newitem" placeholder="Add an item (e.g. 2 lb potatoes)" style="flex:1;min-width:0"><button class="btn primary">Add</button></form>
+      <div class="row tools"><button class="btn" id="share">📤 Send to Keep / copy</button><button class="btn" id="refresh">↻ Refresh</button></div>
+      ${items.length ? '' : '<p class="muted">Nothing on the list yet. Open a recipe, tick what you need, and tap “Add to weekly list”.</p>'}
+      <ul class="shoplist">${open.map(row).join('')}</ul>
+      ${done.length ? `<h2>In the cart</h2><ul class="shoplist">${done.map(row).join('')}</ul>
+        <div class="row"><button class="btn" id="cleardone">Clear ticked items</button></div>` : ''}
+      ${items.length ? '<div class="row"><button class="btn" id="clearall">Clear the whole list</button></div>' : ''}`;
+    const q = s => $app.querySelector(s);
+    q('#addf').onsubmit = async e => {
+      e.preventDefault();
+      const v = q('#newitem').value.trim(); if (!v) return;
+      const p = parseIngredient(v);
+      try { items = (await api({ action: 'shopadd', items: [{ amt: p.amt, unit: p.unit, item: p.item }], recipe: '' })).items; draw(); }
+      catch (err) { toast('Couldn’t add: ' + err.message); }
+    };
+    $app.querySelectorAll('input[type=checkbox][data-id]').forEach(c => c.onchange = async () => {
+      const it = items.find(x => x.id === c.dataset.id); if (!it) return;
+      it.done = c.checked; draw();
+      try { await api({ action: 'shopset', id: it.id, done: it.done }); } catch (err) { it.done = !it.done; draw(); toast('Couldn’t save that tick: ' + err.message); }
+    });
+    $app.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+      const id = b.dataset.del; const was = items; items = items.filter(x => x.id !== id); draw();
+      try { await api({ action: 'shopdelete', mode: 'one', id }); } catch (err) { items = was; draw(); toast('Couldn’t remove: ' + err.message); }
+    });
+    q('#refresh').onclick = async () => { try { items = (await api({ action: 'shoplist' })).items; draw(); toast('Updated'); } catch (err) { toast(err.message); } };
+    const clear = mode => async () => {
+      if (!confirm(mode === 'all' ? 'Clear the whole shopping list for everyone?' : 'Remove the ticked items for everyone?')) return;
+      try { await api({ action: 'shopdelete', mode }); items = mode === 'all' ? [] : items.filter(x => !x.done); draw(); }
+      catch (err) { toast('Couldn’t clear: ' + err.message); }
+    };
+    if (q('#cleardone')) q('#cleardone').onclick = clear('done');
+    if (q('#clearall')) q('#clearall').onclick = clear('all');
+    q('#share').onclick = async () => {
+      const list = items.filter(i => !i.done); if (!list.length) return toast('Nothing left to buy');
+      const text = list.map(i => '☐ ' + shopText(i)).join('\n');
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
+      if (isMobile && navigator.share) { try { await navigator.share({ title: 'Shopping list', text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+      try { await navigator.clipboard.writeText(text); toast('List copied — paste it into an email or note'); } catch (e) { prompt('Copy this list:', text); }
+    };
+  };
+  draw();
+}
+
 // ---------- router ----------
 async function route() {
   const h = location.hash || '#/';
   window.scrollTo(0, 0);
   try {
-    document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.t === (h.startsWith('#/review') ? 'review' : h.startsWith('#/add') || h.startsWith('#/edit') ? '' : 'home')));
+    document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.t === (h.startsWith('#/review') ? 'review' : h.startsWith('#/shop') ? 'shop' : h.startsWith('#/add') || h.startsWith('#/edit') ? '' : 'home')));
     if (h.startsWith('#/review')) return await review();
+    if (h.startsWith('#/shop')) return await shopping();
     if (h.startsWith('#/settings')) return settings();
     if (h.startsWith('#/r/')) return await recipe(decodeURIComponent(h.slice(4)));
     if (h.startsWith('#/edit/')) {
