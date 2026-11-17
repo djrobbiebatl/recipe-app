@@ -248,7 +248,7 @@ async function recipe(id) {
       <a class="btn" href="#/edit/${esc(r.id)}">✏️ Edit</a>
       <button class="btn" id="del">🗑️ Delete</button>
       ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" style="width:auto"> print with picture</label>' : ''}
-      <span class="noprint cal"><button class="btn" id="plan">📅 Add to calendar</button><input type="date" id="pdate" tabindex="-1" aria-hidden="true"></span>
+      <span class="noprint cal"><button class="btn" id="plan">📅 Add to calendar</button></span>
       <label class="noprint" id="awakeRow" hidden><input type="checkbox" id="awake" style="width:auto"> keep screen on</label>
     </div>
     ${preheatLine(r.steps) ? `<p class="preheat">🔥 ${esc(preheatLine(r.steps))}</p>` : ''}
@@ -307,20 +307,15 @@ async function recipe(id) {
     window.addEventListener('hashchange', () => { drop(); document.removeEventListener('visibilitychange', back); }, { once: true });
   }
   // One button: tapping it opens the date picker; choosing a date adds the recipe to that night.
-  const pd = $app.querySelector('#pdate');
-  $app.querySelector('#plan').onclick = () => {
-    pd.value = '';   // empty, so picking today still counts as a change
-    try { pd.showPicker(); } catch (e) { pd.focus(); pd.click(); }
-  };
-  pd.onchange = async () => {
-    const date = pd.value; if (!date) return;
+  // (Our own day picker: phones' built-in date inputs can fire immediately with today's date.)
+  $app.querySelector('#plan').onclick = () => pickDay(async date => {
     const b = $app.querySelector('#plan'); b.disabled = true;
     try {
       const d = await api({ action: 'planadd', date, recipeId: r.id, title: r.title });
       toast(d.already ? 'Already on the calendar for that night' : 'Added to ' + niceDate(date));
     } catch (err) { toast('Couldn’t add: ' + err.message); }
     b.disabled = false;
-  };
+  });
   const chosen = () => {
     const k = servings / (r.servings || 1);
     return [...missing].sort((a, b) => a - b).map(n => { const i = r.ingredients[n]; return { amt: i.amt == null ? null : Math.round(i.amt * k * 1000) / 1000, unit: i.unit || '', item: i.item }; });
@@ -735,6 +730,33 @@ function parseIngredient(line) {
   }
   const rest = m[2].match(/^(cups?|tbsp|tsp|tablespoons?|teaspoons?|oz|ounces?|lbs?|pounds?|g|grams?|kg|ml|l|cloves?|cans?|pinch|dash|slices?|pkts?|pkgs?|packages?|packets?|sticks?|bunch(?:es)?|heads?|jars?|bottles?|boxes|box|sprigs?|stalks?)\b\.?\s*(.*)$/i);
   return rest ? { amt, unit: rest[1], item: rest[2] } : { amt, unit: '', item: m[2] };
+}
+
+// Small pop-up month calendar (weeks start Sunday): tap a day and onPick(date) runs. Tap outside or Cancel to close.
+function pickDay(onPick) {
+  const now = new Date(); let Y = now.getFullYear(), M = now.getMonth() + 1;
+  const back = document.createElement('div'); back.className = 'modal';
+  document.body.appendChild(back);
+  const close = () => back.remove();
+  back.onclick = e => { if (e.target === back) close(); };
+  const draw = () => {
+    const first = new Date(Y, M - 1, 1), days = new Date(Y, M, 0).getDate(), today = ymd(now);
+    let cells = '';
+    for (let i = 0; i < first.getDay(); i++) cells += '<span></span>';
+    for (let d = 1; d <= days; d++) {
+      const date = Y + '-' + String(M).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+      cells += `<button type="button" class="pd ${date === today ? 'today' : ''}" data-d="${date}">${d}</button>`;
+    }
+    back.innerHTML = `<div class="sheet" role="dialog" aria-label="Pick a night">
+      <div class="row calnav"><button type="button" class="btn" id="pm">‹</button><b>${esc(first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))}</b><button type="button" class="btn" id="nm">›</button></div>
+      <div class="pdgrid">${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(x => `<i>${x}</i>`).join('')}${cells}</div>
+      <div class="row" style="justify-content:center"><button type="button" class="btn" id="pc">Cancel</button></div></div>`;
+    back.querySelector('#pm').onclick = () => { M--; if (M < 1) { M = 12; Y--; } draw(); };
+    back.querySelector('#nm').onclick = () => { M++; if (M > 12) { M = 1; Y++; } draw(); };
+    back.querySelector('#pc').onclick = close;
+    back.querySelectorAll('[data-d]').forEach(b => b.onclick = () => { const d = b.dataset.d; close(); onPick(d); });
+  };
+  draw();
 }
 
 // ---------- Calendar tab: dinners planned by date, weeks start on Sunday ----------

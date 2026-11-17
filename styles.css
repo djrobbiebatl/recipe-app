@@ -65,8 +65,13 @@ label.f{display:block;margin:12px 0 4px;font-weight:600}
 p.notes{white-space:pre-wrap}
 p.preheat{font-weight:700;font-size:1.2rem;margin:10px 0}
 p.savetop{margin:0 0 4px}
-.cal{position:relative;display:inline-block}
-.cal input{position:absolute;left:0;bottom:0;width:100%;height:1px;opacity:0;pointer-events:none;padding:0;border:0}
+.cal{display:inline-block}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:30;padding:16px}
+.modal .sheet{background:var(--card);color:var(--ink);border-radius:14px;padding:14px;width:100%;max-width:340px}
+.pdgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin:8px 0}
+.pdgrid i{text-align:center;font-style:normal;font-size:.8rem;color:var(--muted)}
+.pd{border:1px solid var(--line);background:var(--bg);color:inherit;border-radius:8px;padding:10px 0;font:inherit;cursor:pointer}
+.pd.today{border-color:var(--accent);font-weight:700}
 .calnav{justify-content:center;gap:16px}
 .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
 .calgrid .dow{text-align:center;font-weight:600;color:var(--muted);font-size:.85rem}
