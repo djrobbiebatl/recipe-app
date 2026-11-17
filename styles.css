@@ -68,6 +68,7 @@ p.savetop{margin:0 0 4px}
 .cal{display:inline-flex;gap:6px;align-items:center}
 .cal input{width:auto}
 .calnav{justify-content:center;gap:16px}
+.weekshop select{width:auto;max-width:100%}
 .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
 .calgrid .dow{text-align:center;font-weight:600;color:var(--muted);font-size:.85rem}
 .day{min-height:96px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:4px 6px;min-width:0}
