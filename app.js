@@ -753,43 +753,13 @@ async function calendar(ym) {
       ${items.map(p => { const rec = byId.get(p.recipeId); const title = rec ? rec.title : p.title;
         return `<div class="plan">${rec ? `<a href="#/r/${esc(encodeURIComponent(p.recipeId))}">${esc(title)}</a>` : `<span title="This recipe was deleted">${esc(title)}</span>`}<button class="x" data-del="${esc(p.id)}" title="Remove from this night" aria-label="Remove">✕</button></div>`; }).join('')}</div>`);
   }
-  // Sunday–Saturday weeks that touch this month and have dinners planned, for "add the week's ingredients".
-  const weeks = [];
-  const lastDay = new Date(Y, M, 0);
-  for (let start = new Date(Y, M - 1, 1 - lead); start <= lastDay; start = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7)) {
-    const a = ymd(start), b = ymd(new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6));
-    const dinners = plan.filter(p => p.date >= a && p.date <= b);
-    if (dinners.length) weeks.push({ a, b, dinners, label: `${niceDate(a)} – ${niceDate(b)} (${dinners.length} ${dinners.length === 1 ? 'dinner' : 'dinners'})` });
-  }
-  const pick = Math.max(0, weeks.findIndex(w => today >= w.a && today <= w.b));
   const title = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   $app.innerHTML = `
     <h1>📅 Dinner calendar</h1>
     <div class="row calnav"><a class="btn" href="#/calendar/${key(prev)}">‹</a><b>${esc(title)}</b><a class="btn" href="#/calendar/${key(next)}">›</a>
       <a class="btn" href="#/calendar">Today</a></div>
     ${plan.length ? '' : '<p class="muted">Nothing planned yet. Open a recipe, pick a date, and tap “Add to calendar”.</p>'}
-    ${weeks.length ? `<div class="row weekshop"><select id="wk" aria-label="Week">${weeks.map((w, i) => `<option value="${i}" ${i === pick ? 'selected' : ''}>${esc(w.label)}</option>`).join('')}</select>
-      <button class="btn" id="wkadd">🛒 Add this week’s ingredients to the shopping list</button></div>` : ''}
     <div class="calgrid"><div class="dow">Sun</div><div class="dow">Mon</div><div class="dow">Tue</div><div class="dow">Wed</div><div class="dow">Thu</div><div class="dow">Fri</div><div class="dow">Sat</div>${cells.join('')}</div>`;
-  const wkadd = $app.querySelector('#wkadd');
-  if (wkadd) wkadd.onclick = async () => {
-    const w = weeks[+$app.querySelector('#wk').value];
-    const recs = [...new Set(w.dinners.map(p => p.recipeId))].map(id => byId.get(id)).filter(Boolean);
-    if (!recs.length) return toast('Those recipes are no longer in the app');
-    if (!confirm(`Add every ingredient for ${recs.length} ${recs.length === 1 ? 'recipe' : 'recipes'} to the shopping list?\n\n${recs.map(r => '• ' + r.title).join('\n')}\n\nYou can remove anything you already have from the Shopping tab.`)) return;
-    wkadd.disabled = true;
-    try {
-      let merged = 0, added = 0;
-      for (const r of recs) {
-        const items = (r.ingredients || []).map(i => ({ amt: i.amt == null ? null : i.amt, unit: i.unit || '', item: i.item }));
-        if (!items.length) continue;
-        const d = await api({ action: 'shopadd', items, recipe: r.title });
-        merged += d.merged; added += d.added;
-      }
-      toast(`Added ${added} items${merged ? ` (${merged} combined with items already there)` : ''}`);
-      location.hash = '#/shop';
-    } catch (err) { toast('Couldn’t add: ' + err.message); wkadd.disabled = false; }
-  };
   $app.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
     if (!confirm('Remove this recipe from that night?')) return;
     try { await api({ action: 'plandelete', id: b.dataset.del }); calendar(key(first)); } catch (err) { toast('Couldn’t remove: ' + err.message); }
