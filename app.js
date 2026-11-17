@@ -790,7 +790,9 @@ async function pantry() {
           <span class="muted">Uses ${hit.length} of ${terms.length} · ${Math.max(0, r.ingredients.length - hit.length)} other ingredients</span>
           ${miss.length ? `<span class="muted" style="display:block">Doesn’t use: ${esc(miss.join(', '))}</span>` : ''}</div></a>`).join('')}</div>`
       : '<p class="muted">No saved recipe uses those ingredients.</p>')
-      + '<div class="row"><button class="btn primary" id="webgo">🌐 Find ideas on the web</button></div>';
+      + `<div class="row"><button class="btn primary" id="webgo">🌐 Find ideas on the web</button>
+          <a class="btn" id="google" target="_blank" rel="noopener" href="https://www.google.com/search?q=${encodeURIComponent(terms.join(' ') + ' recipe')}">🔍 Search Google</a></div>
+        <p class="muted">Found one on Google? Use your phone’s Share button and pick this app to import it.</p>`;
     out.querySelector('#webgo').onclick = async e => {
       const b = e.currentTarget; b.disabled = true; web.innerHTML = '<p class="muted">Looking around the web…</p>';
       try {
