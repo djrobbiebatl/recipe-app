@@ -442,6 +442,14 @@ async function review() {
   };
 }
 
+// Google search results / AI overview share links are pages built by script; they hold no recipe we can read.
+function isGooglePage(u) {
+  try {
+    const x = new URL(u), h = x.hostname.toLowerCase();
+    return h === 'share.google' || h === 'g.co' || (/(^|\.)google\.[a-z.]+$/.test(h) && /^\/(search|url|aclk|share)/.test(x.pathname));
+  } catch (e) { return false; }
+}
+
 async function add(params, ex) {
   const shared = params || {};
   window.__shared = null; // one-shot, so coming back to Add later doesn't re-import
@@ -515,6 +523,7 @@ async function add(params, ex) {
     const url = $app.querySelector('#iu').value.trim();
     if (!url) return;
     if (!Cfg.url) { msg.textContent = 'Connect the Google Sheet first — import needs it.'; return; }
+    if (isGooglePage(url)) { msg.textContent = 'That’s a Google results page, not the recipe itself, so there’s nothing to read. Tap the recipe’s source link in the Google result, then share that page instead.'; return; }
     msg.textContent = 'Reading the recipe…'; impBtn.disabled = true;
     const showDup = d => { msg.innerHTML = `You already have this one: <a href="#/r/${esc(d.id)}">${esc(d.title)}</a>`; };
     try {
@@ -790,20 +799,20 @@ async function pantry() {
           <span class="muted">Uses ${hit.length} of ${terms.length} · ${Math.max(0, r.ingredients.length - hit.length)} other ingredients</span>
           ${miss.length ? `<span class="muted" style="display:block">Doesn’t use: ${esc(miss.join(', '))}</span>` : ''}</div></a>`).join('')}</div>`
       : '<p class="muted">No saved recipe uses those ingredients.</p>')
-      + `<div class="row"><button class="btn primary" id="webgo">🌐 Find ideas on the web</button>
+      + `<div class="row"><button class="btn primary" id="webgo">🥄 Search Spoonacular</button>
           <a class="btn" id="google" target="_blank" rel="noopener" href="https://www.google.com/search?q=${encodeURIComponent(terms.join(' ') + ' recipe')}">🔍 Search Google</a></div>
         <p class="muted">Found one on Google? Use your phone’s Share button and pick this app to import it.</p>`;
     out.querySelector('#webgo').onclick = async e => {
-      const b = e.currentTarget; b.disabled = true; web.innerHTML = '<p class="muted">Looking around the web…</p>';
+      const b = e.currentTarget; b.disabled = true; web.innerHTML = '<p class="muted">Searching Spoonacular…</p>';
       try {
         const d = await api({ action: 'websuggest', terms });
-        web.innerHTML = '<h2>Ideas from the web</h2>' + (d.results.length ? `<div class="list">${d.results.map((x, n) => `
+        web.innerHTML = '<h2>From Spoonacular</h2>' + (d.results.length ? `<div class="list">${d.results.map((x, n) => `
           <div class="lrow"><div class="lthumb" style="${x.image ? `background-image:url('${esc(safeUrl(x.image))}')` : ''}">${x.image ? '' : '🍽️'}</div>
             <div class="lbody"><b style="white-space:normal">${esc(x.title)}</b>
               <span class="muted" style="display:block">${x.used.length ? 'You have: ' + esc(x.used.join(', ')) : ''}${x.minutes ? ' · ' + x.minutes + ' min' : ''}</span>
               ${x.missed.length ? `<span class="muted" style="display:block">Also needs: ${esc(x.missed.join(', '))}</span>` : ''}
               <span class="row" style="margin:6px 0 0">${safeUrl(x.url) ? `<a class="btn" href="${esc(safeUrl(x.url))}" target="_blank" rel="noopener">View</a><button class="btn primary" data-save="${n}">Save to my recipes</button>` : safeUrl(x.page) ? `<a class="btn" href="${esc(safeUrl(x.page))}" target="_blank" rel="noopener">View</a>` : ''}</span></div></div>`).join('')}</div>`
-          : `<p class="muted">No web recipe found that uses all of: ${esc(terms.join(', '))}. Try dropping one ingredient.</p>`)
+          : `<p class="muted">Spoonacular has no recipe that uses all of: ${esc(terms.join(', '))}. Try dropping one ingredient, or use Search Google.</p>`)
           + (d.results.length && d.results.length < 5 ? `<p class="muted">Only ${d.results.length} found that use everything you typed — drop an ingredient for more ideas.</p>` : '')
           + `<p class="muted">Recipe ideas powered by <a href="https://spoonacular.com/food-api" target="_blank" rel="noopener">spoonacular</a>.${creditsLine(d.quota)}</p>`;
         web.querySelectorAll('[data-save]').forEach(s => s.onclick = () => { const x = d.results[+s.dataset.save]; window.__shared = { title: x.title, url: x.url }; location.hash = '#/add'; });
