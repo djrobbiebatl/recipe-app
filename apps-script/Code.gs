@@ -325,6 +325,20 @@ function webWords_(s) {
   });
 }
 
+/** Adds this call's cost to acc.request and records points used today / left, from the response headers (any capitalisation). */
+function webQuota_(resp, acc) {
+  let h = {};
+  try { h = resp.getHeaders() || {}; } catch (e) {}
+  const get = function (name) {
+    for (const k in h) if (String(k).toLowerCase() === name) { const n = parseFloat(h[k]); return isNaN(n) ? null : n; }
+    return null;
+  };
+  const r = get('x-api-quota-request'), u = get('x-api-quota-used'), l = get('x-api-quota-left');
+  if (r !== null) acc.request = Math.round((acc.request + r) * 100) / 100;
+  if (u !== null) acc.used = u;
+  if (l !== null) acc.left = l;
+}
+
 function webSuggest_(terms) {
   const key = PropertiesService.getScriptProperties().getProperty('SPOONACULAR_KEY');
   if (!key) return out_({ ok: false, error: 'The web search key isn\'t set up yet (Script property SPOONACULAR_KEY).' });
@@ -334,9 +348,11 @@ function webSuggest_(terms) {
   const base = 'https://api.spoonacular.com/recipes/';
   // Spoonacular treats "include these ingredients" as "any of these", so ask for the best 100 (most-used first) and keep only
   // recipes that use EVERY ingredient typed.
+  const quota = { request: 0, used: null, left: null };   // from Spoonacular's X-API-Quota-* response headers
   const found = UrlFetchApp.fetch(base + 'complexSearch?number=100&sort=max-used-ingredients&fillIngredients=true&includeIngredients=' + encodeURIComponent(list.join(',')), opts);
   const code = found.getResponseCode();
-  if (code === 402 || code === 429) return out_({ ok: false, error: 'The free web-search allowance is used up for now. Try again tomorrow — your saved recipes still work.' });
+  webQuota_(found, quota);
+  if (code === 402 || code === 429) return out_({ ok: false, code: 'quota', error: 'We\'re out of web-search credits for today. They reset at midnight UTC — your saved recipes still work.', quota: quota });
   if (code === 401 || code === 403) return out_({ ok: false, error: 'The web search key was rejected — check SPOONACULAR_KEY.' });
   if (code !== 200) return out_({ ok: false, error: 'The web search service had a problem (' + code + '). Try again later.' });
   const hits = (JSON.parse(found.getContentText()).results || []).filter(function (h) {
@@ -346,13 +362,15 @@ function webSuggest_(terms) {
       return need.length && used.some(function (u) { return need.every(function (w) { return u.indexOf(w) >= 0; }); });
     });
   }).slice(0, 6);
-  if (!hits.length) return out_({ ok: true, results: [] });
+  if (!hits.length) return out_({ ok: true, results: [], quota: quota });
   // The first call has no web address for the recipe; one bulk lookup adds it (plus time and servings).
   const info = {};
   const bulk = UrlFetchApp.fetch(base + 'informationBulk?ids=' + hits.map(function (h) { return h.id; }).join(','), opts);
+  webQuota_(bulk, quota);
+  if (bulk.getResponseCode() === 402 || bulk.getResponseCode() === 429) return out_({ ok: false, code: 'quota', error: 'We\'re out of web-search credits for today. They reset at midnight UTC — your saved recipes still work.', quota: quota });
   if (bulk.getResponseCode() === 200) JSON.parse(bulk.getContentText()).forEach(function (x) { info[x.id] = x; });
   const names = function (a) { return (a || []).map(function (i) { return i.name; }); };
-  return out_({ ok: true, results: hits.map(function (h) {
+  return out_({ ok: true, quota: quota, results: hits.map(function (h) {
     const x = info[h.id] || {};
     return { id: h.id, title: h.title, image: h.image || '', url: x.sourceUrl || '', sourceName: x.sourceName || '', page: x.spoonacularSourceUrl || '',
              minutes: x.readyInMinutes || null, servings: x.servings || null, used: names(h.usedIngredients), missed: names(h.missedIngredients) };

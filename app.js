@@ -29,7 +29,7 @@ async function api(body) {
   } catch (e) {
     throw new Error(e.name === 'AbortError' ? 'The server took too long to answer' : 'Could not reach the server (' + e.message + ')');
   } finally { clearTimeout(timer); }
-  if (!data.ok) { if (data.error === 'auth') throw new AuthError('wrong passcode'); throw new Error(data.error || 'server error'); }
+  if (!data.ok) { if (data.error === 'auth') throw new AuthError('wrong passcode'); const err = new Error(data.error || 'server error'); err.code = data.code; err.quota = data.quota; throw err; }
   return data;
 }
 
@@ -746,6 +746,26 @@ function pantryMatch(terms, r) {
   });
   return { hit, miss: terms.filter(t => !hit.includes(t)) };
 }
+// " · This search used 3 points · 12 used today" from Spoonacular's quota headers (left blank if they weren't sent).
+function creditsLine(q) {
+  if (!q) return '';
+  const bits = [];
+  if (q.request) bits.push(`This search used ${q.request} ${q.request === 1 ? 'point' : 'points'}`);
+  if (q.used != null) bits.push(`${q.used} used today`);
+  if (q.left != null) bits.push(`${q.left} left`);
+  return bits.length ? ' · ' + bits.join(' · ') : '';
+}
+// Spoonacular's free credits reset at midnight UTC — show that as the viewer's local time.
+function outOfCredits() {
+  const n = new Date(), reset = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() + 1));
+  const when = reset.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  const back = document.createElement('div'); back.className = 'modal';
+  back.innerHTML = `<div class="sheet" role="alertdialog" aria-label="Out of credits"><h2 style="margin-top:0">Out of web-search credits</h2>
+    <p>We’ve used up today’s free Spoonacular credits. They reset <b>${esc(when)}</b>.</p><p class="muted">Searching your saved recipes still works.</p>
+    <div class="row" style="justify-content:center"><button class="btn primary">OK</button></div></div>`;
+  back.onclick = e => { if (e.target === back || e.target.tagName === 'BUTTON') back.remove(); };
+  document.body.appendChild(back);
+}
 async function pantry() {
   let last = ''; try { last = sessionStorage.getItem('recipes.pantry') || ''; } catch (e) {}
   $app.innerHTML = `
@@ -783,9 +803,13 @@ async function pantry() {
               <span class="row" style="margin:6px 0 0">${safeUrl(x.url) ? `<a class="btn" href="${esc(safeUrl(x.url))}" target="_blank" rel="noopener">View</a><button class="btn primary" data-save="${n}">Save to my recipes</button>` : safeUrl(x.page) ? `<a class="btn" href="${esc(safeUrl(x.page))}" target="_blank" rel="noopener">View</a>` : ''}</span></div></div>`).join('')}</div>`
           : `<p class="muted">No web recipe found that uses all of: ${esc(terms.join(', '))}. Try dropping one ingredient.</p>`)
           + (d.results.length && d.results.length < 5 ? `<p class="muted">Only ${d.results.length} found that use everything you typed — drop an ingredient for more ideas.</p>` : '')
-          + '<p class="muted">Recipe ideas powered by <a href="https://spoonacular.com/food-api" target="_blank" rel="noopener">spoonacular</a>.</p>';
+          + `<p class="muted">Recipe ideas powered by <a href="https://spoonacular.com/food-api" target="_blank" rel="noopener">spoonacular</a>.${creditsLine(d.quota)}</p>`;
         web.querySelectorAll('[data-save]').forEach(s => s.onclick = () => { const x = d.results[+s.dataset.save]; window.__shared = { title: x.title, url: x.url }; location.hash = '#/add'; });
-      } catch (err) { web.innerHTML = `<p>${esc(err.message)}</p>`; if (err instanceof AuthError) throw err; }
+      } catch (err) {
+        if (err instanceof AuthError) throw err;
+        web.innerHTML = `<p>${esc(err.message)}</p>${err.code === 'quota' ? `<p class="muted">${creditsLine(err.quota).replace(/^ · /, '')}</p>` : ''}`;
+        if (err.code === 'quota') outOfCredits();
+      }
       b.disabled = false;
     };
   };
