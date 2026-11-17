@@ -19,7 +19,7 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 async function api(body) {
   if (!Cfg.key) throw new AuthError('no passcode');
   // text/plain keeps this a "simple" request, so the browser skips the CORS preflight Apps Script can't answer.
-  const quick = ['list', 'save', 'delete', 'shoplist', 'shopadd', 'shopset', 'shopdelete'].includes(body.action);
+  const quick = ['list', 'save', 'delete', 'planlist', 'planadd', 'plandelete', 'shoplist', 'shopadd', 'shopset', 'shopdelete'].includes(body.action);
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), quick ? 40000 : 120000);
   let data;
   try {
@@ -248,6 +248,7 @@ async function recipe(id) {
       <a class="btn" href="#/edit/${esc(r.id)}">✏️ Edit</a>
       <button class="btn" id="del">🗑️ Delete</button>
       ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" style="width:auto"> print with picture</label>' : ''}
+      <span class="noprint cal"><input type="date" id="pdate" value="${ymd(new Date())}" aria-label="Dinner date"><button class="btn" id="plan">📅 Add to calendar</button></span>
       <label class="noprint" id="awakeRow" hidden><input type="checkbox" id="awake" style="width:auto"> keep screen on</label>
     </div>
     ${preheatLine(r.steps) ? `<p class="preheat">🔥 ${esc(preheatLine(r.steps))}</p>` : ''}
@@ -305,6 +306,16 @@ async function recipe(id) {
     // leaving this recipe releases the lock
     window.addEventListener('hashchange', () => { drop(); document.removeEventListener('visibilitychange', back); }, { once: true });
   }
+  $app.querySelector('#plan').onclick = async e => {
+    const date = $app.querySelector('#pdate').value;
+    if (!date) return toast('Pick a date first');
+    const b = e.currentTarget; b.disabled = true;
+    try {
+      const d = await api({ action: 'planadd', date, recipeId: r.id, title: r.title });
+      toast(d.already ? 'Already on the calendar for that night' : 'Added to ' + niceDate(date));
+    } catch (err) { toast('Couldn’t add: ' + err.message); }
+    b.disabled = false;
+  };
   const chosen = () => {
     const k = servings / (r.servings || 1);
     return [...missing].sort((a, b) => a - b).map(n => { const i = r.ingredients[n]; return { amt: i.amt == null ? null : Math.round(i.amt * k * 1000) / 1000, unit: i.unit || '', item: i.item }; });
@@ -721,6 +732,40 @@ function parseIngredient(line) {
   return rest ? { amt, unit: rest[1], item: rest[2] } : { amt, unit: '', item: m[2] };
 }
 
+// ---------- Calendar tab: dinners planned by date, weeks start on Sunday ----------
+const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+const niceDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
+async function calendar(ym) {
+  $app.innerHTML = '<p class="muted">Loading the calendar…</p>';
+  const [plan, recipes] = await Promise.all([api({ action: 'planlist' }).then(d => d.plan), Store.list().catch(() => [])]);
+  const byId = new Map(recipes.map(r => [r.id, r]));
+  const now = new Date();
+  let [Y, M] = /^\d{4}-\d{2}$/.test(ym || '') ? ym.split('-').map(Number) : [now.getFullYear(), now.getMonth() + 1];
+  const first = new Date(Y, M - 1, 1), days = new Date(Y, M, 0).getDate(), lead = first.getDay();
+  const prev = new Date(Y, M - 2, 1), next = new Date(Y, M, 1), key = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  const today = ymd(now);
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push('<div class="day blank"></div>');
+  for (let d = 1; d <= days; d++) {
+    const date = Y + '-' + String(M).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+    const items = plan.filter(p => p.date === date);
+    cells.push(`<div class="day ${date === today ? 'today' : ''} ${items.length ? 'has' : ''}"><div class="dnum"><span class="dname">${esc(niceDate(date))}</span><span class="dn">${d}</span></div>
+      ${items.map(p => { const rec = byId.get(p.recipeId); const title = rec ? rec.title : p.title;
+        return `<div class="plan">${rec ? `<a href="#/r/${esc(encodeURIComponent(p.recipeId))}">${esc(title)}</a>` : `<span title="This recipe was deleted">${esc(title)}</span>`}<button class="x" data-del="${esc(p.id)}" title="Remove from this night" aria-label="Remove">✕</button></div>`; }).join('')}</div>`);
+  }
+  const title = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  $app.innerHTML = `
+    <h1>📅 Dinner calendar</h1>
+    <div class="row calnav"><a class="btn" href="#/calendar/${key(prev)}">‹</a><b>${esc(title)}</b><a class="btn" href="#/calendar/${key(next)}">›</a>
+      <a class="btn" href="#/calendar">Today</a></div>
+    ${plan.length ? '' : '<p class="muted">Nothing planned yet. Open a recipe, pick a date, and tap “Add to calendar”.</p>'}
+    <div class="calgrid"><div class="dow">Sun</div><div class="dow">Mon</div><div class="dow">Tue</div><div class="dow">Wed</div><div class="dow">Thu</div><div class="dow">Fri</div><div class="dow">Sat</div>${cells.join('')}</div>`;
+  $app.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Remove this recipe from that night?')) return;
+    try { await api({ action: 'plandelete', id: b.dataset.del }); calendar(key(first)); } catch (err) { toast('Couldn’t remove: ' + err.message); }
+  });
+}
+
 // ---------- Shopping tab: one weekly list shared by everyone ----------
 const shopText = i => ((i.amt == null ? '' : fmtAmt(i.amt)) + ' ' + (i.unit || '') + ' ' + i.item).replace(/\s+/g, ' ').trim();
 async function shopping() {
@@ -781,9 +826,10 @@ async function route() {
   const h = location.hash || '#/';
   window.scrollTo(0, 0);
   try {
-    document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.t === (h.startsWith('#/review') ? 'review' : h.startsWith('#/shop') ? 'shop' : h.startsWith('#/add') || h.startsWith('#/edit') ? '' : 'home')));
+    document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.t === (h.startsWith('#/review') ? 'review' : h.startsWith('#/shop') ? 'shop' : h.startsWith('#/calendar') ? 'cal' : h.startsWith('#/add') || h.startsWith('#/edit') ? '' : 'home')));
     if (h.startsWith('#/review')) return await review();
     if (h.startsWith('#/shop')) return await shopping();
+    if (h.startsWith('#/calendar')) return await calendar(h.slice(11));
     if (h.startsWith('#/settings')) return settings();
     if (h.startsWith('#/r/')) return await recipe(decodeURIComponent(h.slice(4)));
     if (h.startsWith('#/edit/')) {

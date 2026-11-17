@@ -8,6 +8,7 @@ a{color:var(--accent)}
 .tabs{display:flex;justify-content:center;gap:6px;padding:8px 16px 0;max-width:1000px;margin:0 auto;border-bottom:1px solid var(--line)}
 .tabs a{padding:8px 16px;border-radius:10px 10px 0 0;text-decoration:none;color:var(--muted);font-weight:600;border:1px solid transparent;border-bottom:none;margin-bottom:-1px}
 .tabs a.on{color:var(--accent);background:var(--bg);border-color:var(--line)}
+@media (max-width:480px){.tabs{gap:2px;padding:8px 6px 0}.tabs a{padding:8px 9px;font-size:.9rem}}
 .badge{display:inline-block;min-width:1.3em;padding:0 6px;border-radius:999px;background:var(--accent);color:#fff;font-size:.8rem;text-align:center}
 .qitem{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
 .qitem b{display:block;font-size:1.05rem}
@@ -64,6 +65,28 @@ label.f{display:block;margin:12px 0 4px;font-weight:600}
 p.notes{white-space:pre-wrap}
 p.preheat{font-weight:700;font-size:1.2rem;margin:10px 0}
 p.savetop{margin:0 0 4px}
+.cal{display:inline-flex;gap:6px;align-items:center}
+.cal input{width:auto}
+.calnav{justify-content:center;gap:16px}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.calgrid .dow{text-align:center;font-weight:600;color:var(--muted);font-size:.85rem}
+.day{min-height:96px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:4px 6px;min-width:0}
+.day.blank{background:none;border:none}
+.day.today{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.day .dn{font-size:.8rem;color:var(--muted)}
+.day .dname{display:none}
+.plan{display:flex;align-items:flex-start;gap:2px;font-size:.85rem;line-height:1.25;margin-top:3px}
+.plan a,.plan span{flex:1;min-width:0;overflow-wrap:anywhere}
+.plan .x{border:none;background:none;color:var(--muted);cursor:pointer;padding:0 2px;font-size:.8rem}
+@media (max-width:700px){
+  .calgrid{display:block}
+  .calgrid .dow,.day.blank{display:none}
+  .day{min-height:0;margin-bottom:6px;padding:8px 10px}
+  .day:not(.has):not(.today){display:none}
+  .day .dn{display:none}
+  .day .dname{display:inline;font-weight:600}
+  .plan{font-size:1rem}
+}
 ul.shoplist{list-style:none;padding:0;margin:8px 0}
 li.shop{display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--line)}
 li.shop label{flex:1;display:flex;align-items:center;gap:12px;cursor:pointer}

@@ -32,6 +32,9 @@ function doPost(e) {
   if (req.action === 'shopadd') return shopAdd_(req.items, req.recipe);
   if (req.action === 'shopset') return shopSet_(req.id, req.done);
   if (req.action === 'shopdelete') return shopDelete_(req.id, req.mode);
+  if (req.action === 'planlist') return out_({ ok: true, plan: planRows_().map(planOut_) });
+  if (req.action === 'planadd') return planAdd_(req.date, req.recipeId, req.title);
+  if (req.action === 'plandelete') return planDelete_(req.id);
   if (req.action === 'drivelist') return driveList_();
   if (req.action === 'driveimport') return driveImport_(req.id);
   return out_({ ok: false, error: 'unknown action' });
@@ -256,6 +259,59 @@ function shopDelete_(id, mode) {
       const r = rows[i];
       if ((mode === 'one' && r.id === String(id)) || (mode === 'done' && r.done) || mode === 'all') sh.deleteRow(r.row);
     }
+    return out_({ ok: true });
+  } finally { lock.releaseLock(); }
+}
+
+// ---------- dinner calendar: recipes planned for a date, kept in the "Plan" tab (several per night allowed) ----------
+const PLAN_COLS = ['id', 'date', 'recipeId', 'title', 'added'];
+
+function planSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName('Plan');
+  if (!sh) {
+    sh = ss.insertSheet('Plan');
+    sh.getRange(1, 1, 1, PLAN_COLS.length).setNumberFormat('@').setValues([PLAN_COLS]).setFontWeight('bold');
+    sh.getRange('B:B').setNumberFormat('@'); // keep dates as plain 2026-11-20 text
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function planDate_(v) {
+  if (Object.prototype.toString.call(v) === '[object Date]') return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return String(v).slice(0, 10);
+}
+
+function planRows_() {
+  const sh = planSheet_();
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return [];
+  return sh.getRange(2, 1, n, PLAN_COLS.length).getValues().map(function (r, i) {
+    return { row: i + 2, id: String(r[0]), date: planDate_(r[1]), recipeId: String(r[2]), title: String(r[3]) };
+  });
+}
+
+function planOut_(r) { return { id: r.id, date: r.date, recipeId: r.recipeId, title: r.title }; }
+
+function planAdd_(date, recipeId, title) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date)) || !recipeId) return out_({ ok: false, error: 'pick a date' });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const rows = planRows_();
+    const dup = rows.filter(function (r) { return r.date === date && r.recipeId === String(recipeId); })[0];
+    if (!dup) planSheet_().appendRow([Utilities.getUuid(), date, String(recipeId), String(title || '').slice(0, 200), new Date().toISOString()]);
+    return out_({ ok: true, already: !!dup, plan: planRows_().map(planOut_) });
+  } finally { lock.releaseLock(); }
+}
+
+function planDelete_(id) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const r = planRows_().filter(function (x) { return x.id === String(id); })[0];
+    if (r) planSheet_().deleteRow(r.row);
     return out_({ ok: true });
   } finally { lock.releaseLock(); }
 }
