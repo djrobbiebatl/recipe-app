@@ -247,6 +247,7 @@ async function recipe(id) {
       <button class="btn" id="print">🖨️ Print</button>
       <a class="btn" href="#/edit/${esc(r.id)}">✏️ Edit</a>
       <button class="btn" id="del">🗑️ Delete</button>
+      <a class="btn" target="_blank" rel="noopener" href="https://www.google.com/search?q=${encodeURIComponent('recipes similar to ' + r.title)}">🔍 More like this</a>
       ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" style="width:auto"> print with picture</label>' : ''}
       <span class="noprint cal"><button class="btn" id="plan">📅 Add to calendar</button></span>
       <label class="noprint" id="awakeRow" hidden><input type="checkbox" id="awake" style="width:auto"> keep screen on</label>
@@ -523,7 +524,7 @@ async function add(params, ex) {
     const url = $app.querySelector('#iu').value.trim();
     if (!url) return;
     if (!Cfg.url) { msg.textContent = 'Connect the Google Sheet first — import needs it.'; return; }
-    if (isGooglePage(url)) { msg.textContent = 'That’s a Google results page, not the recipe itself, so there’s nothing to read. Tap the recipe’s source link in the Google result, then share that page instead.'; return; }
+    if (isGooglePage(url)) { msg.innerHTML = 'That’s a Google results page, not the recipe itself, so there’s nothing to read. Tap the recipe’s source link in the Google result, then share that page instead.<br><a class="btn" href="#/pantry" style="margin-top:8px">← Back to Pantry</a>'; return; }
     msg.textContent = 'Reading the recipe…'; impBtn.disabled = true;
     const showDup = d => { msg.innerHTML = `You already have this one: <a href="#/r/${esc(d.id)}">${esc(d.title)}</a>`; };
     try {
@@ -776,7 +777,11 @@ function outOfCredits() {
   document.body.appendChild(back);
 }
 async function pantry() {
-  let last = ''; try { last = sessionStorage.getItem('recipes.pantry') || ''; } catch (e) {}
+  // The last search (and its Spoonacular results) is kept on this device, so coming back from a recipe, another app or a
+  // failed share finds it still there — and viewing it again doesn't spend any Spoonacular points.
+  let mem = {}; try { mem = JSON.parse(localStorage.getItem('recipes.pantry2') || '{}') || {}; } catch (e) {}
+  const keep = () => { try { localStorage.setItem('recipes.pantry2', JSON.stringify(mem)); } catch (e) {} };
+  const last = mem.q || '';
   $app.innerHTML = `
     <h1>🥘 Pantry</h1>
     <p class="muted">Type what you have, separated by commas — like <i>chicken breast, stuffing mix</i> — and find recipes that use it.</p>
@@ -787,7 +792,9 @@ async function pantry() {
     const terms = splitTerms($app.querySelector('#pq').value);
     web.innerHTML = '';
     if (!terms.length) { out.innerHTML = ''; return; }
-    try { sessionStorage.setItem('recipes.pantry', terms.join(', ')); } catch (e) {}
+    const q = terms.join(', ');
+    if (mem.q !== q) mem = { q };            // a different search: forget the old web results
+    keep();
     out.innerHTML = '<p class="muted">Searching your recipes…</p>';
     const all = await Store.list();
     const found = all.map(r => ({ r, ...pantryMatch(terms, r) })).filter(x => x.hit.length)
@@ -802,10 +809,7 @@ async function pantry() {
       + `<div class="row"><button class="btn primary" id="webgo">🥄 Search Spoonacular</button>
           <a class="btn" id="google" target="_blank" rel="noopener" href="https://www.google.com/search?q=${encodeURIComponent(terms.join(' ') + ' recipe')}">🔍 Search Google</a></div>
         <p class="muted">Found one on Google? Use your phone’s Share button and pick this app to import it.</p>`;
-    out.querySelector('#webgo').onclick = async e => {
-      const b = e.currentTarget; b.disabled = true; web.innerHTML = '<p class="muted">Searching Spoonacular…</p>';
-      try {
-        const d = await api({ action: 'websuggest', terms });
+    const showWeb = (d, fresh) => {
         web.innerHTML = '<h2>From Spoonacular</h2>' + (d.results.length ? `<div class="list">${d.results.map((x, n) => `
           <div class="lrow"><div class="lthumb" style="${x.image ? `background-image:url('${esc(safeUrl(x.image))}')` : ''}">${x.image ? '' : '🍽️'}</div>
             <div class="lbody"><b style="white-space:normal">${esc(x.title)}</b>
@@ -814,8 +818,15 @@ async function pantry() {
               <span class="row" style="margin:6px 0 0">${safeUrl(x.url) ? `<a class="btn" href="${esc(safeUrl(x.url))}" target="_blank" rel="noopener">View</a><button class="btn primary" data-save="${n}">Save to my recipes</button>` : safeUrl(x.page) ? `<a class="btn" href="${esc(safeUrl(x.page))}" target="_blank" rel="noopener">View</a>` : ''}</span></div></div>`).join('')}</div>`
           : `<p class="muted">Spoonacular has no recipe that uses all of: ${esc(terms.join(', '))}. Try dropping one ingredient, or use Search Google.</p>`)
           + (d.results.length && d.results.length < 5 ? `<p class="muted">Only ${d.results.length} found that use everything you typed — drop an ingredient for more ideas.</p>` : '')
-          + `<p class="muted">Recipe ideas powered by <a href="https://spoonacular.com/food-api" target="_blank" rel="noopener">spoonacular</a>.${creditsLine(d.quota)}</p>`;
+          + `<p class="muted">Recipe ideas powered by <a href="https://spoonacular.com/food-api" target="_blank" rel="noopener">spoonacular</a>.${fresh ? creditsLine(d.quota) : ' · Saved from your last search — no points used.'}</p>`;
         web.querySelectorAll('[data-save]').forEach(s => s.onclick = () => { const x = d.results[+s.dataset.save]; window.__shared = { title: x.title, url: x.url }; location.hash = '#/add'; });
+    };
+    if (mem.web) showWeb(mem.web, false);
+    out.querySelector('#webgo').onclick = async e => {
+      const b = e.currentTarget; b.disabled = true; web.innerHTML = '<p class="muted">Searching Spoonacular…</p>';
+      try {
+        const d = await api({ action: 'websuggest', terms });
+        mem.web = d; keep(); showWeb(d, true);
       } catch (err) {
         if (err instanceof AuthError) throw err;
         web.innerHTML = `<p>${esc(err.message)}</p>${err.code === 'quota' ? `<p class="muted">${creditsLine(err.quota).replace(/^ · /, '')}</p>` : ''}`;
