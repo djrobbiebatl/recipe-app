@@ -19,7 +19,7 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 async function api(body) {
   if (!Cfg.key) throw new AuthError('no passcode');
   // text/plain keeps this a "simple" request, so the browser skips the CORS preflight Apps Script can't answer.
-  const quick = ['list', 'save', 'delete', 'planlist', 'planadd', 'plandelete', 'shoplist', 'shopadd', 'shopset', 'shopdelete'].includes(body.action);
+  const quick = ['list', 'save', 'delete', 'websuggest', 'planlist', 'planadd', 'plandelete', 'shoplist', 'shopadd', 'shopset', 'shopdelete'].includes(body.action);
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), quick ? 40000 : 120000);
   let data;
   try {
@@ -732,6 +732,66 @@ function parseIngredient(line) {
   return rest ? { amt, unit: rest[1], item: rest[2] } : { amt, unit: '', item: m[2] };
 }
 
+// ---------- Pantry tab: type what you have, find saved recipes that use it, optionally get ideas from the web ----------
+const WEAK = new Set(['mix', 'fresh', 'frozen', 'canned', 'dried', 'boneless', 'skinless', 'whole', 'large', 'small', 'medium', 'of', 'the', 'a']);
+const stem = w => w.endsWith('ies') ? w.slice(0, -3) + 'y' : w.endsWith('oes') ? w.slice(0, -2) : w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w;
+const words = s => String(s).toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean).map(stem);
+const splitTerms = q => q.split(/[,;\n]+/).map(t => t.trim()).filter(Boolean);
+// Which of the typed ingredients does this recipe use? "chicken breast" matches "boneless skinless chicken breasts"; filler words like "mix" are optional.
+function pantryMatch(terms, r) {
+  const ing = (r.ingredients || []).map(i => new Set(words(i.item)));
+  const hit = terms.filter(t => {
+    const all = words(t), core = all.filter(w => !WEAK.has(w)), need = core.length ? core : all;
+    return need.length && ing.some(s => need.every(w => s.has(w)));
+  });
+  return { hit, miss: terms.filter(t => !hit.includes(t)) };
+}
+async function pantry() {
+  let last = ''; try { last = sessionStorage.getItem('recipes.pantry') || ''; } catch (e) {}
+  $app.innerHTML = `
+    <h1>🥘 Pantry</h1>
+    <p class="muted">Type what you have, separated by commas — like <i>chicken breast, stuffing mix</i> — and find recipes that use it.</p>
+    <form class="row" id="pf"><input id="pq" placeholder="chicken breast, stuffing mix" value="${esc(last)}" style="flex:1;min-width:0"><button class="btn primary">Search</button></form>
+    <div id="pres"></div><div id="pweb"></div>`;
+  const out = $app.querySelector('#pres'), web = $app.querySelector('#pweb');
+  const run = async () => {
+    const terms = splitTerms($app.querySelector('#pq').value);
+    web.innerHTML = '';
+    if (!terms.length) { out.innerHTML = ''; return; }
+    try { sessionStorage.setItem('recipes.pantry', terms.join(', ')); } catch (e) {}
+    out.innerHTML = '<p class="muted">Searching your recipes…</p>';
+    const all = await Store.list();
+    const found = all.map(r => ({ r, ...pantryMatch(terms, r) })).filter(x => x.hit.length)
+      .sort((a, b) => b.hit.length - a.hit.length || (a.r.ingredients.length - a.hit.length) - (b.r.ingredients.length - b.hit.length) || a.r.title.localeCompare(b.r.title));
+    out.innerHTML = `<h2>Your saved recipes</h2>` + (found.length ? `<div class="list">${found.map(({ r, hit, miss }) => `
+      <a class="lrow" href="#/r/${esc(encodeURIComponent(r.id))}">
+        <div class="lthumb" style="${r.image ? `background-image:url('${esc(safeUrl(r.image))}')` : ''}">${r.image ? '' : '🍽️'}</div>
+        <div class="lbody"><b>${esc(r.title)}</b>
+          <span class="muted">Uses ${hit.length} of ${terms.length} · ${Math.max(0, r.ingredients.length - hit.length)} other ingredients</span>
+          ${miss.length ? `<span class="muted" style="display:block">Doesn’t use: ${esc(miss.join(', '))}</span>` : ''}</div></a>`).join('')}</div>`
+      : '<p class="muted">No saved recipe uses those ingredients.</p>')
+      + '<div class="row"><button class="btn primary" id="webgo">🌐 Find ideas on the web</button></div>';
+    out.querySelector('#webgo').onclick = async e => {
+      const b = e.currentTarget; b.disabled = true; web.innerHTML = '<p class="muted">Looking around the web…</p>';
+      try {
+        const d = await api({ action: 'websuggest', terms });
+        web.innerHTML = '<h2>Ideas from the web</h2>' + (d.results.length ? `<div class="list">${d.results.map((x, n) => `
+          <div class="lrow"><div class="lthumb" style="${x.image ? `background-image:url('${esc(safeUrl(x.image))}')` : ''}">${x.image ? '' : '🍽️'}</div>
+            <div class="lbody"><b style="white-space:normal">${esc(x.title)}</b>
+              <span class="muted" style="display:block">${x.used.length ? 'You have: ' + esc(x.used.join(', ')) : ''}${x.minutes ? ' · ' + x.minutes + ' min' : ''}</span>
+              ${x.missed.length ? `<span class="muted" style="display:block">Also needs: ${esc(x.missed.join(', '))}</span>` : ''}
+              <span class="row" style="margin:6px 0 0">${safeUrl(x.url) ? `<a class="btn" href="${esc(safeUrl(x.url))}" target="_blank" rel="noopener">View</a><button class="btn primary" data-save="${n}">Save to my recipes</button>` : safeUrl(x.page) ? `<a class="btn" href="${esc(safeUrl(x.page))}" target="_blank" rel="noopener">View</a>` : ''}</span></div></div>`).join('')}</div>`
+          : '<p class="muted">Nothing found on the web for that combination — try fewer ingredients.</p>')
+          + '<p class="muted">Recipe ideas powered by <a href="https://spoonacular.com/food-api" target="_blank" rel="noopener">spoonacular</a>.</p>';
+        web.querySelectorAll('[data-save]').forEach(s => s.onclick = () => { const x = d.results[+s.dataset.save]; window.__shared = { title: x.title, url: x.url }; location.hash = '#/add'; });
+      } catch (err) { web.innerHTML = `<p>${esc(err.message)}</p>`; if (err instanceof AuthError) throw err; }
+      b.disabled = false;
+    };
+  };
+  $app.querySelector('#pf').onsubmit = e => { e.preventDefault(); run().catch(err => { out.innerHTML = `<p>Couldn’t search: ${esc(err.message)}</p>`; }); };
+  if (last) run().catch(() => {});
+}
+
 // Small pop-up month calendar (weeks start Sunday): tap a day and onPick(date) runs. Tap outside or Cancel to close.
 function pickDay(onPick) {
   const now = new Date(); let Y = now.getFullYear(), M = now.getMonth() + 1;
@@ -853,9 +913,10 @@ async function route() {
   const h = location.hash || '#/';
   window.scrollTo(0, 0);
   try {
-    document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.t === (h.startsWith('#/review') ? 'review' : h.startsWith('#/shop') ? 'shop' : h.startsWith('#/calendar') ? 'cal' : h.startsWith('#/add') || h.startsWith('#/edit') ? '' : 'home')));
+    document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.t === (h.startsWith('#/review') ? 'review' : h.startsWith('#/shop') ? 'shop' : h.startsWith('#/pantry') ? 'pantry' : h.startsWith('#/calendar') ? 'cal' : h.startsWith('#/add') || h.startsWith('#/edit') ? '' : 'home')));
     if (h.startsWith('#/review')) return await review();
     if (h.startsWith('#/shop')) return await shopping();
+    if (h.startsWith('#/pantry')) return await pantry();
     if (h.startsWith('#/calendar')) return await calendar(h.slice(11));
     if (h.startsWith('#/settings')) return settings();
     if (h.startsWith('#/r/')) return await recipe(decodeURIComponent(h.slice(4)));

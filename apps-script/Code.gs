@@ -35,6 +35,7 @@ function doPost(e) {
   if (req.action === 'planlist') return out_({ ok: true, plan: planRows_().map(planOut_) });
   if (req.action === 'planadd') return planAdd_(req.date, req.recipeId, req.title);
   if (req.action === 'plandelete') return planDelete_(req.id);
+  if (req.action === 'websuggest') return webSuggest_(req.terms);
   if (req.action === 'drivelist') return driveList_();
   if (req.action === 'driveimport') return driveImport_(req.id);
   return out_({ ok: false, error: 'unknown action' });
@@ -314,6 +315,33 @@ function planDelete_(id) {
     if (r) planSheet_().deleteRow(r.row);
     return out_({ ok: true });
   } finally { lock.releaseLock(); }
+}
+
+// ---------- Pantry tab: web suggestions from Spoonacular's free plan (key is the Script property SPOONACULAR_KEY) ----------
+function webSuggest_(terms) {
+  const key = PropertiesService.getScriptProperties().getProperty('SPOONACULAR_KEY');
+  if (!key) return out_({ ok: false, error: 'The web search key isn\'t set up yet (Script property SPOONACULAR_KEY).' });
+  const list = (terms || []).map(function (t) { return String(t).trim().slice(0, 60); }).filter(Boolean).slice(0, 8);
+  if (!list.length) return out_({ ok: false, error: 'Type a few ingredients first' });
+  const opts = { muteHttpExceptions: true, headers: { 'x-api-key': key } };
+  const base = 'https://api.spoonacular.com/recipes/';
+  const found = UrlFetchApp.fetch(base + 'findByIngredients?number=6&ranking=1&ignorePantry=true&ingredients=' + encodeURIComponent(list.join(',')), opts);
+  const code = found.getResponseCode();
+  if (code === 402 || code === 429) return out_({ ok: false, error: 'The free web-search allowance is used up for now. Try again tomorrow — your saved recipes still work.' });
+  if (code === 401 || code === 403) return out_({ ok: false, error: 'The web search key was rejected — check SPOONACULAR_KEY.' });
+  if (code !== 200) return out_({ ok: false, error: 'The web search service had a problem (' + code + '). Try again later.' });
+  const hits = JSON.parse(found.getContentText());
+  if (!hits.length) return out_({ ok: true, results: [] });
+  // The first call has no web address for the recipe; one bulk lookup adds it (plus time and servings).
+  const info = {};
+  const bulk = UrlFetchApp.fetch(base + 'informationBulk?ids=' + hits.map(function (h) { return h.id; }).join(','), opts);
+  if (bulk.getResponseCode() === 200) JSON.parse(bulk.getContentText()).forEach(function (x) { info[x.id] = x; });
+  const names = function (a) { return (a || []).map(function (i) { return i.name; }); };
+  return out_({ ok: true, results: hits.map(function (h) {
+    const x = info[h.id] || {};
+    return { id: h.id, title: h.title, image: h.image || '', url: x.sourceUrl || '', sourceName: x.sourceName || '', page: x.spoonacularSourceUrl || '',
+             minutes: x.readyInMinutes || null, servings: x.servings || null, used: names(h.usedIngredients), missed: names(h.missedIngredients) };
+  }) });
 }
 
 // ---------- import from Drive: a "Recipe Inbox" folder to pick from, or a pasted Drive/Docs link ----------
