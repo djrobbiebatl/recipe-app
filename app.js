@@ -245,12 +245,15 @@ async function recipe(id) {
     </div>
     <div class="row tools">
       <button class="btn" id="print">🖨️ Print</button>
+      ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" style="width:auto"> print with picture</label>' : ''}
+    </div>
+    <div class="row tools">
       <a class="btn" href="#/edit/${esc(r.id)}">✏️ Edit</a>
       <button class="btn" id="del">🗑️ Delete</button>
+    </div>
+    <div class="row tools">
       <a class="btn" target="_blank" rel="noopener" href="https://www.google.com/search?q=${encodeURIComponent('recipes similar to ' + r.title)}">🔍 More like this</a>
-      ${r.image ? '<label class="noprint"><input type="checkbox" id="pimg" style="width:auto"> print with picture</label>' : ''}
       <span class="noprint cal"><button class="btn" id="plan">📅 Add to calendar</button></span>
-      <label class="noprint" id="awakeRow" hidden><input type="checkbox" id="awake" style="width:auto"> keep screen on</label>
     </div>
     ${preheatLine(r.steps) ? `<p class="preheat">🔥 ${esc(preheatLine(r.steps))}</p>` : ''}
     ${marinateLine(r.steps) ? `<p class="preheat">⏱️ ${esc(marinateLine(r.steps))}</p>` : ''}
@@ -261,7 +264,7 @@ async function recipe(id) {
         <table class="ing" id="ing"></table>
         <div class="row tools"><button class="btn primary" id="weekly">🛒 Add to weekly list</button><button class="btn" id="shop">Send to Keep / copy</button></div>
       </section>
-      <section><h2>Instructions</h2><ol class="steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol></section>
+      <section><h2>Instructions <label class="noprint" id="awakeRow" hidden style="font-size:.9rem;font-weight:400"><input type="checkbox" id="awake" style="width:auto"> keep screen on</label></h2><ol class="steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol></section>
     </div>
     ${r.notes ? `<h2>Notes</h2><p class="notes">${esc(r.notes)}</p>` : ''}
     ${r.nutrition ? `<h2>Nutrition</h2><table class="nut">${String(r.nutrition).split('\n').filter(Boolean).map(l => {
@@ -785,7 +788,7 @@ async function pantry() {
   $app.innerHTML = `
     <h1>🥘 Pantry</h1>
     <p class="muted">Type what you have, separated by commas — like <i>chicken breast, stuffing mix</i> — and find recipes that use it.</p>
-    <form class="row" id="pf"><input id="pq" placeholder="chicken breast, stuffing mix" value="${esc(last)}" style="flex:1;min-width:0"><button class="btn primary">Search</button></form>
+    <form class="row" id="pf"><span class="clearwrap"><input id="pq" placeholder="chicken breast, stuffing mix" value="${esc(last)}"><button type="button" class="clearx" id="pclear" aria-label="Clear search" title="Clear"${last ? '' : ' hidden'}>×</button></span><button class="btn primary">Search</button></form>
     <div id="pres"></div><div id="pweb"></div>`;
   const out = $app.querySelector('#pres'), web = $app.querySelector('#pweb');
   const run = async () => {
@@ -807,7 +810,7 @@ async function pantry() {
           ${miss.length ? `<span class="muted" style="display:block">Doesn’t use: ${esc(miss.join(', '))}</span>` : ''}</div></a>`).join('')}</div>`
       : '<p class="muted">No saved recipe uses those ingredients.</p>')
       + `<div class="row"><button class="btn primary" id="webgo">🥄 Search Spoonacular</button>
-          <a class="btn" id="google" target="_blank" rel="noopener" href="https://www.google.com/search?q=${encodeURIComponent(terms.join(' ') + ' recipe')}">🔍 Search Google</a></div>
+          <a class="btn alt" id="google"target="_blank" rel="noopener" href="https://www.google.com/search?q=${encodeURIComponent(terms.join(' ') + ' recipe')}">🔍 Search Google</a></div>
         <p class="muted">Found one on Google? Use your phone’s Share button and pick this app to import it.</p>`;
     const showWeb = (d, fresh) => {
         web.innerHTML = '<h2>From Spoonacular</h2>' + (d.results.length ? `<div class="list">${d.results.map((x, n) => `
@@ -836,6 +839,9 @@ async function pantry() {
     };
   };
   $app.querySelector('#pf').onsubmit = e => { e.preventDefault(); run().catch(err => { out.innerHTML = `<p>Couldn’t search: ${esc(err.message)}</p>`; }); };
+  const pq = $app.querySelector('#pq'), px = $app.querySelector('#pclear');
+  pq.oninput = () => { px.hidden = !pq.value; };
+  px.onclick = () => { pq.value = ''; px.hidden = true; mem = {}; keep(); out.innerHTML = ''; web.innerHTML = ''; pq.focus(); };
   if (last) run().catch(() => {});
 }
 
